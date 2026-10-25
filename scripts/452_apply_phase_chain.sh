@@ -245,6 +245,14 @@ if [ "${A52_VARIANT_ID}" = G ]; then
   python3 scripts/452_scm_ufs_ice_audit.py --root "$ROOT"
   python3 scripts/450_dsp_aoss_source_prep.py --root "$ROOT" --check-only
   python3 scripts/451_dsp_pas_source.py --root "$ROOT" --check-only
+  # P461: experimental native downstream 5.10 adsprpc source. Build ONLY on
+  # isolated real-port branch. No merged release may use this without
+  # link ABI, lazy DMA owner and ADSP runtime evidence.
+  if [ "${A52_P461_REAL_PORT:-0}" = 1 ]; then
+    python3 -m py_compile scripts/461_install_real_adsprpc.py
+    python3 scripts/461_install_real_adsprpc.py --root "$ROOT"
+    python3 scripts/461_install_real_adsprpc.py --root "$ROOT" --check-only
+  fi
 fi
 python3 -m py_compile scripts/447c_quiet_frame_trace.py
 python3 scripts/447c_quiet_frame_trace.py --root "$ROOT"
@@ -309,6 +317,10 @@ if [ "${A52_VARIANT_ID}" = G ]; then
     --enable REMOTEPROC --enable RPMSG_QCOM_SMD \
     --enable QCOM_Q6V5_PAS --enable QCOM_SCM \
     --disable QCOM_SCM_DOWNLOAD_MODE_DEFAULT
+  if [ "${A52_P461_REAL_PORT:-0}" = 1 ]; then
+    "$ROOT/scripts/config" --file "$BUILD/.config" \
+      --enable MSM_ADSPRPC --disable QCOM_FASTRPC
+  fi
 fi
 make -C "$ROOT" O="$BUILD" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
 grep -Fxq 'CONFIG_LOCALVERSION="-Mangrove"' "$BUILD/.config"
