@@ -210,9 +210,9 @@ def do(root):
             for attr in ("DMA_ATTR_DELAYED_UNMAP",
                          "DMA_ATTR_IOMMU_USE_UPSTREAM_HINT",
                          "DMA_ATTR_IOMMU_USE_LLC_NWA"):
-                pattern=r"(?m)^(#define "+attr+r"\\s+[^\\n]+)$"
+                pattern=r"(?m)^(#define "+attr+r"\s+[^\n]+)$"
                 data,n=re.subn(pattern,
-                    lambda m:"#ifndef "+attr+"\\n"+m.group(1)+"\\n#endif",
+                    lambda m:"#ifndef "+attr+"\n"+m.group(1)+"\n#endif",
                     data)
                 if n != 1:
                     raise RuntimeError("P461 DMA attribute anchor drift "+attr)

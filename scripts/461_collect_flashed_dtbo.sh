@@ -7,9 +7,9 @@ OUT="${1:-a52-p461-dtbo-capture}"
 mkdir -p "$OUT"
 adb wait-for-device
 {
-  echo "ro.boot.slot_suffix=$(adb shell getprop ro.boot.slot_suffix | tr -d '\\r')"
-  echo "ro.boot.dtbo_idx=$(adb shell getprop ro.boot.dtbo_idx | tr -d '\\r')"
-  echo "ro.boot.hardware.revision=$(adb shell getprop ro.boot.hardware.revision | tr -d '\\r')"
+  echo "ro.boot.slot_suffix=$(adb shell getprop ro.boot.slot_suffix | tr -d '\r')"
+  echo "ro.boot.dtbo_idx=$(adb shell getprop ro.boot.dtbo_idx | tr -d '\r')"
+  echo "ro.boot.hardware.revision=$(adb shell getprop ro.boot.hardware.revision | tr -d '\r')"
   adb shell su -c 'ls -l /dev/block/by-name/dtbo*'
   adb shell su -c 'readlink -f /dev/block/by-name/dtbo'
   adb shell su -c 'blockdev --getsize64 /dev/block/by-name/dtbo'
