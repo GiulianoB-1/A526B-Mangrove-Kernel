@@ -257,7 +257,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/461_install_real_adsprpc.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/461_install_real_adsprpc.py scripts/461_assemble_adsprpc_boot.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -273,8 +273,8 @@ jobs:
           python3 scripts/457_source_safety_gates.py --root "$ROOT" --baseline-smmu "$RUNNER_TEMP/P457-PRE-SMMU.c" --dsp-runtime --config "$PWD/workspace/gki-phase199-out/.config" --deferred-report docs/p458-dsp-deferred-device-audit.md
           test -f "$ROOT/drivers/char/adsprpc.c"
           grep -Fq 'A52_P461_DOWNSTREAM_ADSPRPC_5_10_SOURCE_PORT_V1' "$ROOT/drivers/char/adsprpc.c"
-          grep -Fxq 'CONFIG_MSM_ADSPRPC=y' "$BUILD/.config"
-          ! grep -Fxq 'CONFIG_QCOM_FASTRPC=y' "$BUILD/.config"
+          grep -Fxq 'CONFIG_MSM_ADSPRPC=y' "$PWD/workspace/gki-phase199-out/.config"
+          ! grep -Fxq 'CONFIG_QCOM_FASTRPC=y' "$PWD/workspace/gki-phase199-out/.config"
           echo 'P461 SOURCE PASS: Qualcomm downstream real adsprpc staged; SMMU attach first session; compile must still succeed'
           echo 'P460B SOURCE PASS: default apps-SMMU veto retained, experimental TG mode root-only; H0 guard 2s, P453 QUSB G, P458 SCM unchanged'
       - name: Mandatory strict final-tree manifest audit (pre-compile)
@@ -934,6 +934,19 @@ jobs:
               --dtb-out phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
               --report phase447b-variants/P461-ADSP-ONLY-PREBUILD-MANIFEST.json \
               | tee phase447b-variants/P461-ADSP-ONLY-PREBUILD-AUDIT.txt
+            # This may run only when the native donor driver linked.
+            # Keep the original P460b image as a baseline and emit a distinct
+            # DO-NOT-FLASH P461 image containing exactly three ADSP SIDs.
+            python3 scripts/461_assemble_adsprpc_boot.py --boot "$FINAL_G" \
+              --dtb phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
+              --output phase447b-variants/MANGROVE-P461-ADSPRPC-UNVALIDATED.boot.img \
+              --report phase447b-variants/P461-ASSEMBLED-BOOT.json
+            python3 scripts/461_final_boot_ecc48_gate.py \
+              --boot phase447b-variants/MANGROVE-P461-ADSPRPC-UNVALIDATED.boot.img \
+              --dtb-out phase447b-variants/P461-ASSEMBLED-FINAL-ECC48.dtb \
+              --report phase447b-variants/P461-ASSEMBLED-FINAL-ECC48.json
+            echo 'P461 donor driver compile+link is not runtime validation; this image is DO NOT FLASH' >> "$GITHUB_STEP_SUMMARY"
+
           fi
       - name: Upload Phase446i GKI failure diagnostics
         if: failure()
@@ -1056,6 +1069,11 @@ jobs:
           name: MANGROVE-P461-EXPERIMENTAL-DO-NOT-FLASH-${{ github.run_number }}
           path: |
             phase447b-variants/MANGROVE-P458-DSP-SCM-ON-DEMAND.boot.img
+            phase447b-variants/MANGROVE-P461-ADSPRPC-UNVALIDATED.boot.img
+            phase447b-variants/P461-ASSEMBLED-BOOT.json
+            phase447b-variants/P461-ASSEMBLED-FINAL-ECC48.dtb
+            phase447b-variants/P461-ASSEMBLED-FINAL-ECC48.json
+            scripts/461_assemble_adsprpc_boot.py
             scripts/460b_apps_smmu_tg.py
             scripts/461_install_real_adsprpc.py
             scripts/461_collect_flashed_dtbo.sh
