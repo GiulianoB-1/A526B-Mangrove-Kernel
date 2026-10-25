@@ -3,7 +3,7 @@
 # through /dev/block/by-name on this boot, plus the live Linux FDT.
 # Run with adb installed from Linux, WSL or Git Bash (NOT PowerShell 5 piping).
 set -euo pipefail
-OUT="\${1:-a52-p461-dtbo-capture}"
+OUT="${1:-a52-p461-dtbo-capture}"
 mkdir -p "$OUT"
 adb wait-for-device
 {
