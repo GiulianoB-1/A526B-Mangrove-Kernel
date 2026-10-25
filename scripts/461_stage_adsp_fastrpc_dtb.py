@@ -39,20 +39,79 @@ def check_cb(p,n,index,common=None):
     assert "dma-coherent" in (run("fdtget","-p",p,n) or "").splitlines(),(n,"coherency")
     if index==12:assert cells(p,n,"shared-cb")==[5],(n,"shared-cb")
     return got[0]
+def unique_apps_smmu(p):
+    # Exact physical TCU identity and TG 2-cell translator, not KGSL SMMU.
+    matches=[]
+    for n in nodes(p):
+        if n.rsplit("/",1)[-1] != "apps-smmu@15000000":
+            continue
+        compatible=(prop(p,n,"compatible") or "").split()
+        if "qcom,qsmmu-v500" not in compatible:
+            continue
+        if cells(p,n,"#iommu-cells") != [2]:
+            continue
+        if "qcom,skip-init" not in (run("fdtget","-p",p,n) or "").splitlines():
+            continue
+        reg=cells(p,n,"reg")
+        if not reg or 0x15000000 not in reg[:2]:
+            continue
+        ph=cells(p,n,"phandle")
+        if not ph:
+            ph=cells(p,n,"linux,phandle")
+        if ph and len(ph)==1 and ph[0]!=0:
+            matches.append((n,ph[0]))
+    if len(matches)!=1:
+        raise RuntimeError("P461 cannot prove unique 0x15000000 apps-SMMU phandle "
+                           +repr(matches))
+    return matches[0]
+
+def add_cb(p,parent,n,smmu):
+    dst=parent+"/qcom,msm_fastrpc_compute_cb"+str(n)
+    if dst in set(nodes(p)):
+        raise RuntimeError("P461 refusing to overwrite existing "+dst)
+    run("fdtput","-c",p,dst)
+    run("fdtput","-t","s",p,dst,"compatible","qcom,msm-fastrpc-compute-cb")
+    run("fdtput","-t","s",p,dst,"label","adsprpc-smd")
+    run("fdtput","-t","x",p,dst,"iommus",hex(smmu),hex(0x1003+n-10),"0")
+    run("fdtput","-t","x",p,dst,"qcom,iommu-dma-addr-pool",
+        "0x80000000","0x78000000")
+    run("fdtput","-t","s",p,dst,"qcom,iommu-faults",
+        "stall-disable","HUPCF")
+    run("fdtput",p,dst,"dma-coherent")
+    if n==12:
+        run("fdtput","-t","x",p,dst,"shared-cb","5")
+
 def stage(p):
-    parents=[n for n in nodes(p)
-             if prop(p,n,"compatible")=="qcom,msm-fastrpc-compute"]
-    if len(parents)!=1:raise RuntimeError("P461 missing/ambiguous compute parent "+repr(parents))
-    parent=parents[0]; children0=children(p,parent)
+    parent_candidates=[n for n in nodes(p)
+                       if "qcom,msm-fastrpc-compute" in
+                       (prop(p,n,"compatible") or "").split()]
+    if len(parent_candidates)>1:
+        raise RuntimeError("P461 ambiguous existing fastrpc parents "
+                           +repr(parent_candidates))
+    smmu_node,smmu=unique_apps_smmu(p)
+    generated=False
+    if not parent_candidates:
+        # P460b's TG-derived packaged DTB does not have this parent.
+        # Create ONLY the ADSP subset from pinned TG lagoon.dtsi.
+        parent="/soc/qcom,msm_fastrpc"
+        if prop(p,"/soc","compatible") is None and "/soc" not in set(nodes(p)):
+            raise RuntimeError("P461 cannot locate parent /soc")
+        if parent in set(nodes(p)):
+            raise RuntimeError("P461 existing parent without expected compatible")
+        run("fdtput","-c",p,parent)
+        run("fdtput","-t","s",p,parent,"compatible","qcom,msm-fastrpc-compute")
+        run("fdtput","-t","x",p,parent,"qcom,rpc-latency-us","235")
+        for cb in (10,11,12):
+            add_cb(p,parent,cb,smmu)
+        generated=True
+    else:
+        parent=parent_candidates[0]
+    before=children(p,parent)
     chosen=["qcom,msm_fastrpc_compute_cb"+str(n) for n in (10,11,12)]
-    for idx,k in zip((10,11,12),chosen):
-        check_cb(p,parent+"/"+k,idx)
-    smmu=cells(p,parent+"/"+chosen[0],"iommus")[0]
-    for idx,k in zip((10,11,12),chosen):
-        check_cb(p,parent+"/"+k,idx,smmu)
     removed=[]
-    for name in children0:
-        if name in chosen:continue
+    for name in before:
+        if name in chosen:
+            continue
         n=parent+"/"+name
         label=prop(p,n,"label")
         if label!="cdsprpc-smd" or not name.startswith("qcom,msm_fastrpc_compute_cb"):
@@ -62,16 +121,26 @@ def stage(p):
             raise RuntimeError("P461 refusing unexpected CDSP SID: "+n+" "+repr(sid))
         run("fdtput","-r",p,n)
         removed.append({"node":n,"sid":sid[1]})
-    if len(removed)!=9:
-        raise RuntimeError(f"P461 expected 9 CDSP CBs, removed {len(removed)}")
-    assert children(p,parent)==chosen,(parent,children(p,parent))
+    if len(removed) not in (0,9):
+        raise RuntimeError("P461 partial CDSP context banks "+repr(removed))
+    for index,k in zip((10,11,12),chosen):
+        check_cb(p,parent+"/"+k,index,smmu)
+    if sorted(children(p,parent))!=sorted(chosen):
+        raise RuntimeError("P461 ADSP-only node set incorrect: "
+                           +repr(children(p,parent)))
     edge="/soc/qcom,lpass@3000000/glink-edge/qcom,msm_fastrpc_rpmsg"
-    assert prop(p,edge,"compatible")=="qcom,msm-fastrpc-rpmsg",(edge,"compatible")
-    assert prop(p,edge,"qcom,glink-channels")=="fastrpcglink-apps-dsp",(edge,"channel")
-    assert inspect_pstore(p,patched=True)["ecc_size"]==[48],"P461 ECC48 missing"
-    return {"parent":parent,"remaining_cb":chosen,"sids":["0x1003","0x1004","0x1005"],
-            "tbu":"ADSP only","smmu_phandle":smmu,"rpmsg":edge,
-            "removed":removed,"status":"PREBUILD DTB ONLY - downstream driver NOT ported"}
+    if prop(p,edge,"compatible")!="qcom,msm-fastrpc-rpmsg":
+        raise RuntimeError("P461 existing ADSP RPMSG binding absent "+edge)
+    if prop(p,edge,"qcom,glink-channels")!="fastrpcglink-apps-dsp":
+        raise RuntimeError("P461 wrong ADSP RPMSG channel "+edge)
+    if inspect_pstore(p,patched=True)["ecc_size"]!=[48]:
+        raise RuntimeError("P461 ECC48 lost")
+    return {"parent":parent,"generated_parent":generated,
+            "smmu_node":smmu_node,"smmu_phandle":smmu,
+            "remaining_cb":chosen,"sids":["0x1003","0x1004","0x1005"],
+            "tbu":"ADSP only","rpmsg":edge,
+            "removed":removed,
+            "status":"PREBUILD DTB ONLY - downstream driver NOT ported"}
 def main():
     a=argparse.ArgumentParser()
     a.add_argument("--boot",type=Path,required=True)
