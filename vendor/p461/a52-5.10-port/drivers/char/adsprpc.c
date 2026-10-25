@@ -4603,6 +4603,8 @@ static int fastrpc_init_process(struct fastrpc_file *fl,
 	if (err)
 		goto bail;
 	fl->dsp_proc_init = 1;
+	pr_info("P461 FASTRPC PD_START cid=%d tgid=%d flags=%u rc=0\n",
+		cid, fl->tgid, init->flags);
 bail:
 	return err;
 }
@@ -5703,6 +5705,8 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	mutex_unlock(&gcinfo[cid].rpmsg_mutex);
 	ADSPRPC_INFO("opened rpmsg channel for %s\n",
 		gcinfo[cid].subsys);
+	pr_info("P461 FASTRPC RPMSG UP cid=%d channel=%s\n",
+		cid, gcinfo[cid].subsys);
 bail:
 	if (err)
 		ADSPRPC_ERR("rpmsg probe of %s cid %d failed\n",
@@ -6390,6 +6394,8 @@ static int fastrpc_device_open(struct inode *inode, struct file *filp)
 						sizeof(struct dev_pm_qos_request),
 							GFP_KERNEL);
 	init_completion(&fl->shutdown);
+	pr_info("P461 FASTRPC OPEN minor=%d tgid=%d cid=unselected\n",
+		dev_minor, current->tgid);
 	return 0;
 }
 
@@ -7560,6 +7566,11 @@ static int fastrpc_cb_probe(struct device *dev)
 					__func__, dev_name(dev), err);
 		goto bail;
 	}
+	/* P461: this is a SID discovery at CB PROBE, NOT a lazy attach.
+	 * A real SMMU ATTACH marker must be at the first session mapping.
+	 */
+	pr_info("P461 FASTRPC PROBE CB dev=%s sid=0x%x args=%d\n",
+		dev_name(dev), iommuspec.args[0], iommuspec.args_count);
 	/* Enabling best fit to utilize IOVA space effectively */
 	iommu_dma_enable_best_fit_algo(dev);
 
@@ -7918,6 +7929,8 @@ static int fastrpc_probe(struct platform_device *pdev)
 	if (err)
 		goto bail;
 bail:
+	if (!err)
+		pr_info("P461 FASTRPC PROBE parent=%s rc=0\n", dev_name(dev));
 	return err;
 }
 
