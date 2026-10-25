@@ -1,9 +1,9 @@
-name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P460B TG opt-in default off, guard 2s, QUSB rails, ECC48, DSP frozen
+name: Mangrove P461 experimental downstream FastRPC compile gate
+run-name: P461 real Qualcomm 5.10 adsprpc compile-only, H0/P460b frozen
 on:
   push:
     branches:
-      - agent/p461-fastrpc-abi-audit-ecc48
+      - agent/p461-adsprpc-real-port-dtbo-forensics
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -21,6 +21,7 @@ env:
   # Defined-empty prevents Kbuild's dirty-tree '+' from changing uname -r.
   LOCALVERSION: ''
   TOUCHGRASS_COMMIT: 6bf351bdf18bdb228db79e66f14a7a9c0178e5d7
+  A52_P461_REAL_PORT: '1'
   TOUCHGRASS_REPO: https://github.com/micr0softstore/samsung_android_kernel_a52xq.git
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 1G
@@ -256,7 +257,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/461_install_real_adsprpc.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -270,6 +271,11 @@ jobs:
           grep -Fq 'P452 ICE EARLY_FAIL_CLOSED' "$ROOT/drivers/scsi/ufs/ufs-qcom-ice.c"
           grep -Fq '#define A52_UFS_ICE_SAFE_BRINGUP' "$ROOT/drivers/scsi/ufs/ufs-qcom-ice.c"
           python3 scripts/457_source_safety_gates.py --root "$ROOT" --baseline-smmu "$RUNNER_TEMP/P457-PRE-SMMU.c" --dsp-runtime --config "$PWD/workspace/gki-phase199-out/.config" --deferred-report docs/p458-dsp-deferred-device-audit.md
+          test -f "$ROOT/drivers/char/adsprpc.c"
+          grep -Fq 'A52_P461_DOWNSTREAM_ADSPRPC_5_10_SOURCE_PORT_V1' "$ROOT/drivers/char/adsprpc.c"
+          grep -Fxq 'CONFIG_MSM_ADSPRPC=y' "$BUILD/.config"
+          ! grep -Fxq 'CONFIG_QCOM_FASTRPC=y' "$BUILD/.config"
+          echo 'P461 SOURCE PASS: Qualcomm downstream real adsprpc staged; SMMU attach first session; compile must still succeed'
           echo 'P460B SOURCE PASS: default apps-SMMU veto retained, experimental TG mode root-only; H0 guard 2s, P453 QUSB G, P458 SCM unchanged'
       - name: Mandatory strict final-tree manifest audit (pre-compile)
         run: |
@@ -573,6 +579,8 @@ jobs:
               grep -aFq 'P460B SMMU RESUME cycle=' "$IMAGE" || { echo '::error title=P460B missing compiled resume marker::'; exit 1; }
               grep -aFq 'P460B SMMU SUSPEND cycle=' "$IMAGE" || { echo '::error title=P460B missing compiled suspend marker::'; exit 1; }
               grep -Fq 'A52_P460B_APPS_SMMU_TG_OPTIN_V1' "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu.c"
+            grep -aFq 'P461 FASTRPC OPEN' "$IMAGE" || { echo '::error title=P461 no linked downstream FastRPC::'; exit 1; }
+            grep -aFq 'P461 FASTRPC SMMU ATTACH' "$IMAGE" || { echo '::error title=P461 no linked CB DMA marker::'; exit 1; }
               grep -Fq 'system suspend blocked until qsmmuv500 TBU support is ported' "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu.c"
               echo 'P460B LINK PASS: dormant TG opt-in compiled, original Phase206 -EBUSY guard retained'
               echo 'P457 SMMU LINK PASS: qcom arm-smmu built; fatal forced-defer marker ABSENT; P451 probe path retained'
@@ -1045,10 +1053,13 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P460B-TG-EXPERIMENT-${{ github.run_number }}
+          name: MANGROVE-P461-EXPERIMENTAL-DO-NOT-FLASH-${{ github.run_number }}
           path: |
             phase447b-variants/MANGROVE-P458-DSP-SCM-ON-DEMAND.boot.img
             scripts/460b_apps_smmu_tg.py
+            scripts/461_install_real_adsprpc.py
+            scripts/461_collect_flashed_dtbo.sh
+            scripts/461_dtbo_forensics.py
             phase447b-variants/P458-DSP-DISABLED-SCM-DTB.json
             phase447b-variants/P458-DSP-DISABLED-SCM-AUDIT.txt
             docs/p458-dsp-deferred-device-audit.md
