@@ -256,7 +256,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -920,6 +920,12 @@ jobs:
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
               | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
             cat phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt >> "$GITHUB_STEP_SUMMARY"
+            # Stage the *future* P461 DTB separately. Do NOT repack a boot
+            # with this until a real downstream adsprpc driver/ABI is proven.
+            python3 scripts/461_stage_adsp_fastrpc_dtb.py --boot "$FINAL_G" \
+              --dtb-out phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
+              --report phase447b-variants/P461-ADSP-ONLY-PREBUILD-MANIFEST.json \
+              | tee phase447b-variants/P461-ADSP-ONLY-PREBUILD-AUDIT.txt
           fi
       - name: Upload Phase446i GKI failure diagnostics
         if: failure()
@@ -1052,6 +1058,11 @@ jobs:
             phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json
             phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
             scripts/461_final_boot_ecc48_gate.py
+            phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb
+            phase447b-variants/P461-ADSP-ONLY-PREBUILD-MANIFEST.json
+            phase447b-variants/P461-ADSP-ONLY-PREBUILD-AUDIT.txt
+            scripts/461_stage_adsp_fastrpc_dtb.py
+            docs/p461-fastrpc-5.10-abi-and-dependency-gate.md
             phase447b-variants/compiled-variant.json
             phase447b-variants/READ-BEFORE-FLASH.txt
             phase447b-variants/P448-IPC-BOOT-AUDIT.txt
