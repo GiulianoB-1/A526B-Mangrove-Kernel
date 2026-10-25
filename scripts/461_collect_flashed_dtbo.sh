@@ -7,14 +7,16 @@ OUT="${1:-a52-p461-dtbo-capture}"
 mkdir -p "$OUT"
 adb wait-for-device
 {
-  adb shell 'getprop ro.boot.slot_suffix; getprop ro.boot.dtbo_idx; getprop ro.boot.hardware.revision'
+  echo "ro.boot.slot_suffix=$(adb shell getprop ro.boot.slot_suffix | tr -d '\\r')"
+  echo "ro.boot.dtbo_idx=$(adb shell getprop ro.boot.dtbo_idx | tr -d '\\r')"
+  echo "ro.boot.hardware.revision=$(adb shell getprop ro.boot.hardware.revision | tr -d '\\r')"
   adb shell su -c 'ls -l /dev/block/by-name/dtbo*'
   adb shell su -c 'readlink -f /dev/block/by-name/dtbo'
   adb shell su -c 'blockdev --getsize64 /dev/block/by-name/dtbo'
 } >"$OUT/partition-identity.txt" 2>&1
 adb shell 'cat /proc/cmdline' >"$OUT/proc-cmdline.txt"
 adb shell 'getprop' >"$OUT/getprop.txt"
-adb shell su -c 'dd if=/dev/block/by-name/dtbo bs=1048576 2>/dev/null' >"$OUT/flashed-dtbo.img"
+adb exec-out su -c 'dd if=/dev/block/by-name/dtbo bs=1048576 2>/dev/null' >"$OUT/flashed-dtbo.img"
 if [ ! -s "$OUT/flashed-dtbo.img" ]; then
  echo 'ERROR: no DTBO bytes. Check su/root, slot suffix and by-name alias' >&2
  exit 1
@@ -31,3 +33,8 @@ sha256sum "$OUT/flashed-dtbo.img" >"$OUT/partition-sha256.txt"
 if [ -s "$OUT/live-fdt.dtb" ]; then sha256sum "$OUT/live-fdt.dtb" >>"$OUT/partition-sha256.txt"; fi
 printf 'Captured READ-ONLY %s\n' "$OUT"
 printf 'IMPORTANT: inspect partition-identity.txt for the actual slot/alias; this script does not flash.\n'
+
+# On the analysis workstation, decode and compare with the packaged boot DTB:
+# python3 scripts/461_dtbo_forensics.py --dtbo "$OUT/flashed-dtbo.img" \\
+#   --identity "$OUT/partition-identity.txt" --live-dtb "$OUT/live-fdt.dtb" \\
+#   --boot-dtb YOUR_EXTRACTED_FINAL_BOOT_DTB --out "$OUT/decoded"

@@ -1,7 +1,6 @@
 # P461 ADSP FastRPC — downstream ABI donor audit / integration gate
 
-**Status:** ABI/source review and final-boot ECC48 gate only. **No FastRPC
-driver, device nodes, or ADSP session support is present in this branch.**
+**Status:** Qualcomm downstream FastRPC driver sources are staged in `vendor/p461` and installed only during the experimental workflow. Build #528 failed at compile; there is **no linked, runtime-validated FastRPC image**.
 Do not call the unchanged P460b boot image "P461 FastRPC".
 
 ## Source pins
@@ -120,3 +119,9 @@ verification **after all repacks**. This branch adds
 (\`P461-FINAL-BOOT-ECC48.dtb\`) alongside a manifest with boot and DTB
 SHA256. This is a **packaging** proof only; runtime
 \`pstore: Registered ramoops\` must still be observed on-device.
+
+## October 25, 2026 compile gate and DTBO parser correction
+
+Build #528 (run 40209644835) reaches `drivers/char/adsprpc.o` but fails on three Qualcomm DMA attribute redefinitions and missing `soc/qcom/minidump.h`. The next trial imports the upstream-pinned minidump declaration header and guards these three definitions so **common 5.10's existing DMA bit values take precedence**. No success claim until full compile and link, ABI audit and on-device child-owned DMA mapping checks pass.
+
+The P461 DTBO analyzer initially decoded Android DTBO table headers as little-endian, while AOSP `mkdtboimg.py` writes big-endian. Corrected both header and entry decoding. Analyzer now accepts a partition-identity capture, reports the bootloader-selected entry only when `ro.boot.dtbo_idx` is actually available, and compares packaged DTB, flashed DTBO entries and runtime FDT for the phantom node. Without the read-only capture from the **phone**, no conclusion about the flashed partition or bootloader fixup is possible.

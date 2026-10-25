@@ -77,16 +77,17 @@ def dtbo_entries(data):
         if total>len(data):raise RuntimeError("raw FDT overrun")
         return [{"index":0,"offset":0,"size":total,"data":data[:total],
                  "format":"raw-fdt"}]
-    hdr=struct.unpack_from("<8I",data)
+    # Android libufdt mkdtboimg.py encodes DTBO tables in BIG-endian.
+    hdr=struct.unpack_from(">8I",data)
     magic,total,headsz,entsz,count,offset,page,version=hdr
-    if magic!=MAGIC:raise RuntimeError("DTBO magic not Android table or raw FDT: "+data[:16].hex())
-    if total>len(data) or headsz<32 or entsz<32 or count>128 or offset<32:
+    if magic!=MAGIC:raise RuntimeError("DTBO magic not Android BIG-endian table or raw FDT: "+data[:16].hex())
+    if total>len(data) or headsz<32 or entsz<32 or count>128 or offset<headsz:
         raise RuntimeError("malformed Android DTBO table header "+repr(hdr))
     if offset+count*entsz>total:raise RuntimeError("DTBO entries overflow")
     out=[]
     for idx in range(count):
         e=offset+idx*entsz
-        size,pos,ident,rev,*custom=struct.unpack_from("<8I",data,e)
+        size,pos,ident,rev,*custom=struct.unpack_from(">8I",data,e)
         if pos<32 or size<40 or pos+size>total:raise RuntimeError("bad DTBO entry "+str(idx))
         blob=data[pos:pos+size]
         if blob[:4]!=FDT:raise RuntimeError("DTBO entry is not FDT: "+str(idx))
@@ -102,12 +103,22 @@ def main():
     p.add_argument("--dtbo",type=Path,required=True,help="Raw dd of /dev/block/by-name/dtbo (NOT boot.img)")
     p.add_argument("--boot-dtb",type=Path,help="Extracted final boot.img FDT for comparison")
     p.add_argument("--live-dtb",type=Path,help="Snapshot of /sys/firmware/fdt AFTER bootloader fixes")
+    p.add_argument("--identity",type=Path,help="partition-identity.txt from the read-only capture")
     p.add_argument("--out",type=Path,required=True)
     args=p.parse_args()
     args.out.mkdir(parents=True,exist_ok=True)
     src=args.dtbo.read_bytes()
+    identity = args.identity.read_text(errors="replace") if args.identity else ""
+    reported_index = None
+    for line in identity.splitlines():
+        if line.startswith("ro.boot.dtbo_idx="):
+            value=line.partition("=")[2].strip()
+            if value:
+                reported_index=int(value,0)
     entries=dtbo_entries(src)
     report={"dtbo_path":str(args.dtbo),"dtbo_sha256":sha(src),
+            "partition_identity":identity,
+            "bootloader_reported_dtbo_idx":reported_index,
             "dtbo_partition_bytes":len(src),"dtbo_entries":[]}
     for e in entries:
         name=f"dtbo-entry-{e['index']:02d}"
@@ -125,11 +136,33 @@ def main():
         if file:
             blob=file.read_bytes()
             report[label] = describe_fdt(blob)
-    if "live_runtime" not in report:
-        report["selected_dtbo_entry"] = "UNPROVEN: no live FDT or bootloader selection metadata"
-        report["source_of_any_runtime_overlap"] = "UNPROVEN: a DTBO may be applied, or bootloader/kernel may add nodes"
+    if reported_index is not None:
+        if not 0 <= reported_index < len(entries):
+            raise RuntimeError("bootloader-reported DTBO index outside captured image")
+        report["selected_dtbo_entry"] = reported_index
     else:
-        report["selected_dtbo_entry"] = "Requires bootloader DTBO index/matching-id evidence; live diff alone not sufficient"
+        report["selected_dtbo_entry"] = "UNPROVEN: no bootloader index; table id/rev alone do not establish selection"
+    phantom="a52-ramoops-reserved@b1b00000"
+    suspect=[x["index"] for x in report["dtbo_entries"] if
+             any(phantom in n.lower() for n in x["ramoops_nodes"])]
+    report["dtbo_entries_containing_phantom"] = suspect
+    live=report.get("live_runtime")
+    boot=report.get("packaged_boot")
+    def has_phantom(tree):
+        return bool(tree and any(phantom in n.lower() for n in tree["ramoops_nodes"]))
+    report["evidence"]={
+      "packaged_boot_phantom":has_phantom(boot),
+      "live_fdt_phantom":has_phantom(live),
+      "any_dtbo_entry_phantom":bool(suspect),
+      "reported_index_contains_phantom":reported_index in suspect if reported_index is not None else None}
+    if has_phantom(boot):
+        report["source_of_any_runtime_overlap"]="Packaged boot DTB already contains phantom; investigate boot build first"
+    elif reported_index in suspect and reported_index is not None and has_phantom(live):
+        report["source_of_any_runtime_overlap"]="Captured selected DTBO contains phantom and live FDT contains it"
+    elif not suspect and has_phantom(live) and boot is not None:
+        report["source_of_any_runtime_overlap"]="Not in supplied boot DTB or captured DTBO entries; investigate different flashed boot, bootloader fix-up, or kernel mutation"
+    else:
+        report["source_of_any_runtime_overlap"]="UNPROVEN: need known boot DTB, live FDT and selected DTBO index for attribution"
     (args.out/"dtbo-forensics.json").write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
     print("P461 DTBO FORENSICS",report["dtbo_sha256"],
           "entries",len(entries),"live_fdt",bool(args.live_dtb),

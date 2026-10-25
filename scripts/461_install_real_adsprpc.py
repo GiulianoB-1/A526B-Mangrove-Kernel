@@ -20,7 +20,8 @@ FILES=("drivers/char/adsprpc.c","drivers/char/adsprpc_shared.h",
        "include/linux/mem-buf.h","include/soc/qcom/ramdump.h",
        "include/soc/qcom/qcom_ramdump.h",
        "include/linux/remoteproc/qcom_rproc.h",
-       "include/soc/qcom/socinfo.h","include/uapi/linux/msm_ion_ids.h")
+       "include/soc/qcom/socinfo.h","include/soc/qcom/minidump.h",
+       "include/uapi/linux/msm_ion_ids.h")
 ROOT=Path("vendor/p461/qualcomm-5.10")
 REQUIRED_ABI=[
  "FASTRPC_IOCTL_INVOKE","FASTRPC_IOCTL_MMAP","FASTRPC_IOCTL_MUNMAP",
@@ -202,6 +203,19 @@ def do(root):
             data=edit_c(source.read_text())
         else:
             data=source.read_text()
+        if rel=="include/linux/qcom-dma-mapping.h":
+            # Common 5.10 already defines these with platform-owned bit
+            # assignments. Keep the GKI definitions instead of redefining
+            # DMA attributes with potentially incompatible Qualcomm bits.
+            for attr in ("DMA_ATTR_DELAYED_UNMAP",
+                         "DMA_ATTR_IOMMU_USE_UPSTREAM_HINT",
+                         "DMA_ATTR_IOMMU_USE_LLC_NWA"):
+                pattern=r"(?m)^(#define "+attr+r"\\s+[^\\n]+)$"
+                data,n=re.subn(pattern,
+                    lambda m:"#ifndef "+attr+"\\n"+m.group(1)+"\\n#endif",
+                    data)
+                if n != 1:
+                    raise RuntimeError("P461 DMA attribute anchor drift "+attr)
         target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(data)
     mk=root/"drivers/char/Makefile"
