@@ -15,14 +15,61 @@ def run(*args,optional=False):
     if p.returncode and not optional:
         raise RuntimeError(f"P461 FDT {args} rc={p.returncode}: {p.stderr[-350:]}")
     return None if p.returncode else p.stdout.strip()
+def nodes(p):
+    # fdtget -l on root cannot be relied upon for complete traversal in
+    # this final TG boot FDT. Walk the bounded FDT structure block directly.
+    # This visits every node, including /soc/apps-smmu and /soc/qcom,msm_fastrpc.
+    import struct
+    raw=Path(p).read_bytes()
+    if len(raw)<40:
+        raise RuntimeError("P461 short FDT")
+    magic,total,off_struct,_,_,_,_,_,_,size_struct=struct.unpack_from(">10I",raw)
+    if magic!=0xd00dfeed or total!=len(raw) or off_struct+size_struct>len(raw):
+        raise RuntimeError("P461 malformed FDT header")
+    end_struct=off_struct+size_struct
+    i=off_struct
+    stack=[]
+    complete=False
+    while i+4<=end_struct:
+        token=struct.unpack_from(">I",raw,i)[0]
+        i+=4
+        if token==1:
+            end=raw.find(b"\0",i,end_struct)
+            if end<0:
+                raise RuntimeError("P461 unterminated node")
+            name=raw[i:end].decode("ascii","strict")
+            i=(end+4)&~3
+            if not stack and name!="":
+                raise RuntimeError("P461 bad FDT root")
+            stack.append(name)
+            yield "/" if len(stack)==1 else "/"+"/".join(stack[1:])
+        elif token==2:
+            if not stack:
+                raise RuntimeError("P461 unexpected FDT_END_NODE")
+            stack.pop()
+        elif token==3:
+            if i+8>end_struct:
+                raise RuntimeError("P461 truncated FDT_PROP")
+            length,_=struct.unpack_from(">2I",raw,i)
+            i+=8+((length+3)&~3)
+            if i>end_struct:
+                raise RuntimeError("P461 invalid FDT_PROP size")
+        elif token==4:
+            pass
+        elif token==9:
+            if stack:
+                raise RuntimeError("P461 FDT_END inside node")
+            complete=True
+            break
+        else:
+            raise RuntimeError(f"P461 bad FDT token {token:#x}")
+    if not complete:
+        raise RuntimeError("P461 missing FDT_END")
+
 def children(p,n):
-    c=run("fdtget","-l",p,n,optional=True)
-    return c.splitlines() if c else []
-def nodes(p,n="/",level=0):
-    if level>=32:raise RuntimeError("P461 runaway tree")
-    yield n
-    for child in children(p,n):
-        yield from nodes(p,n.rstrip("/")+"/"+child,level+1)
+    return [path.rsplit("/",1)[-1] for path in nodes(p)
+            if path.startswith(n.rstrip("/")+"/")
+            and path.count("/")==n.count("/")+1]
 def prop(p,n,k,fmt="s"):
     return run("fdtget","-t",fmt,p,n,k,optional=True)
 def cells(p,n,k):
