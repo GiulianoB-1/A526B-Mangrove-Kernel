@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/p461-fastrpc-abi-audit-ecc48
+      - agent/p461-real-adsprpc-dtbo-forensics
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -264,6 +265,11 @@ jobs:
           python3 scripts/458_dsp_runtime_scm.py --root "$ROOT"
           python3 scripts/460b_apps_smmu_tg.py --root "$ROOT"
           python3 scripts/460b_apps_smmu_tg.py --root "$ROOT" --check-only
+          if [ "${{ matrix.variant.id }}" = G ]; then
+            python3 scripts/461_graft_adsprpc_donor.py --root "$ROOT" \
+              --report phase447-inventory/P461-ADSPRPC-PORT-BLOCKERS.json
+            echo 'P461 donor is SOURCE-ONLY; no fake CONFIG_MSM_ADSPRPC or char nodes; blockers in report' >> "$GITHUB_STEP_SUMMARY"
+          fi
           python3 scripts/453_daily_usb_resume.py --root "$ROOT" --check-only
           grep -Fq "P460B_H0_GUARD_2S_WDT_10S_V1" "$ROOT/drivers/a52_447/a52_sm5714_fg_ro.c"
           grep -Fq "#define A52G_GUARD_POLL_MS 2000" "$ROOT/drivers/a52_447/a52_sm5714_fg_ro.c"
@@ -920,6 +926,10 @@ jobs:
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
               | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
             cat phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/461_dtbo_live_audit.py --boot "$FINAL_G" \
+              --out phase447b-variants/P461-FDT-SOURCE-PROVENANCE \
+              > phase447b-variants/P461-FDT-SOURCE-PROVENANCE.json
+            echo 'P461 FINAL BOOT FDT FORENSICS PASS (no flashed DTBO or live FDT available on CI)' >> "$GITHUB_STEP_SUMMARY"
             # Stage the *future* P461 DTB separately. Do NOT repack a boot
             # with this until a real downstream adsprpc driver/ABI is proven.
             python3 scripts/461_stage_adsp_fastrpc_dtb.py --boot "$FINAL_G" \
@@ -1062,6 +1072,12 @@ jobs:
             phase447b-variants/P461-ADSP-ONLY-PREBUILD-MANIFEST.json
             phase447b-variants/P461-ADSP-ONLY-PREBUILD-AUDIT.txt
             scripts/461_stage_adsp_fastrpc_dtb.py
+            scripts/461_dtbo_live_audit.py
+            scripts/461_dump_flashed_dtbo_windows.cmd
+            scripts/461_graft_adsprpc_donor.py
+            phase447-inventory/P461-ADSPRPC-PORT-BLOCKERS.json
+            phase447b-variants/P461-FDT-SOURCE-PROVENANCE.json
+            phase447b-variants/P461-FDT-SOURCE-PROVENANCE/p461-dtbo-provenance.json
             docs/p461-fastrpc-5.10-abi-and-dependency-gate.md
             phase447b-variants/compiled-variant.json
             phase447b-variants/READ-BEFORE-FLASH.txt
