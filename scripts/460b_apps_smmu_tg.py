@@ -165,11 +165,21 @@ def patch(s):
     # The Phase206 veto must still be present when knob is 0.
     head = 'static int __maybe_unused arm_smmu_pm_resume(struct device *dev)\n{'
     s = one(s, head, HELPER + '\n' + head, "helper placement")
-    s = one(s, head, head + r"""
+    # All declarations in the original kernel resume function must precede
+    # executable statements (kernel C dialect rejects C99 mixed declarations).
+    # The original 5.10 implementation declares its local smmu pointer first.
+    resume_start = s.index(head)
+    resume_end = s.index("\n}", resume_start)
+    resume_body = s[resume_start:resume_end]
+    local = "struct arm_smmu_device *smmu = dev_get_drvdata(dev);"
+    if resume_body.count(local) != 1:
+        raise RuntimeError("P460B unexpected arm_smmu_pm_resume declarations")
+    resume_body = resume_body.replace(local, local + r"""
+
 	if (a52_p460b_scope(dev) &&
 	    READ_ONCE(a52_p460b_suspend_armed))
-		return a52_p460b_tg_resume(dev);
-""", "resume dispatch")
+		return a52_p460b_tg_resume(dev);""", 1)
+    s = s[:resume_start] + resume_body + s[resume_end:]
     sig = 'static int __maybe_unused arm_smmu_pm_suspend(struct device *dev)\n{'
     p = s.index(sig)
     k = s.index('if (a52_apps_smmu_has_unmanaged_tbus(dev)) {',p)
