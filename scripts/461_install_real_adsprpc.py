@@ -16,7 +16,11 @@ FILES=("drivers/char/adsprpc.c","drivers/char/adsprpc_shared.h",
        "include/linux/fastrpc.h","include/trace/events/fastrpc.h",
        "include/linux/qcom-dma-mapping.h",
        "include/linux/msm_dma_iommu_mapping.h",
-       "include/soc/qcom/secure_buffer.h","include/uapi/linux/msm_ion.h")
+       "include/soc/qcom/secure_buffer.h","include/uapi/linux/msm_ion.h",
+       "include/linux/mem-buf.h","include/soc/qcom/ramdump.h",
+       "include/soc/qcom/qcom_ramdump.h",
+       "include/linux/remoteproc/qcom_rproc.h",
+       "include/soc/qcom/socinfo.h","include/uapi/linux/msm_ion_ids.h")
 ROOT=Path("vendor/p461/qualcomm-5.10")
 REQUIRED_ABI=[
  "FASTRPC_IOCTL_INVOKE","FASTRPC_IOCTL_MMAP","FASTRPC_IOCTL_MUNMAP",
