@@ -31,14 +31,14 @@ Do not call the unchanged P460b boot image "P461 FastRPC".
 | 6 | INIT | INIT | present |
 | 7 | INVOKE_ATTRS | INVOKE_ATTRS | present |
 | 8 | GETINFO | GETINFO | present |
-| 9 | GETPERF | **not defined/dispatched** | **ABI GAP**: cannot claim full vendor compatibility |
+| 9 | GETPERF | **not defined/dispatched** | **OPEN ABI GAP**: cannot claim full vendor compatibility or fake performance results |
 | 10 | INIT_ATTRS | INIT_ATTRS | present |
 | 11 | INVOKE_CRC | INVOKE_CRC | present |
 | 12 | CONTROL | CONTROL | present |
 | 13 | MUNMAP_FD | MUNMAP_FD | present |
 | 14 | MMAP_64 | MMAP_64 | present |
 | 15 | MUNMAP_64 | MUNMAP_64 | present |
-| 17 | GET_DSP_INFO | GET_DSP_INFO | present |
+| 16 | GET_DSP_INFO (domain + 256 capabilities) | **absent: donor uses cmd 17 / 12-byte single capability** | **ABI GAP** in original donor; port branch adds 1028-byte 64/32-bit compatibility handler calling DSP capability cache |
 
 Donor additionally supports INVOKE2 (18), MEM_MAP (19),
 MEM_UNMAP (20), INVOKE_PERF (21), and NOTIF_RSP (22 in UAPI).
@@ -120,3 +120,46 @@ verification **after all repacks**. This branch adds
 (\`P461-FINAL-BOOT-ECC48.dtb\`) alongside a manifest with boot and DTB
 SHA256. This is a **packaging** proof only; runtime
 \`pstore: Registered ramoops\` must still be observed on-device.
+
+
+## Hardware report / ramoops provenance (2026-10-25)
+
+P461 hardware: manual ADSP first activation failed with userspace reboot
+~100 seconds later (early kernel log unavailable); second activation succeeded.
+This **does not establish** a FastRPC regression or ADSP functional acceptance.
+
+P460b P458 ECC48 final boot FDT checks passed, but hardware pstore
+registration fails due to **two overlapping 0xB1B00000 reservations**.
+The original unpatched Phase446S boot-final.dts ALREADY contains
+`/reserved-memory/a52-ramoops-reserved@b1b00000`,
+`compatible = "ramoops"`, `ecc-size=<0>`,
+`reg=<0 0xb1b00000 0 0x100000>`.
+P458 raises its ECC size to 48 and does not create this node.
+The **other** `ramoops@B1B00000` seen on-device is not present in that
+unpatched DTB. Its origin is currently UNKNOWN; candidate sources include
+the separate flashed dtbo, bootloader fix-ups or later platform changes.
+The boot-v2 artifact has `recovery_dtbo_size=0` and does NOT supply a
+standalone dtbo partition. Do not guess which DTBO is flashed.
+
+Capture the real partition + live FDT:
+`scripts/461_dump_flushed_dtbo_windows.cmd` (Windows CMD, read-only).
+Compare offline with `scripts/461_dtbo_live_audit.py --boot <image>
+--dtbo <dump> --live <live.dtb> --out <directory>`.
+The inspector extracts all DTBO table entries, optional decompiled DTS
+when dtc exists, both FDT node sets, hashes and extra live ramoops paths.
+Collector v1.20 live `/proc/device-tree` observations will determine whether
+the node was present at kernel entry. No destructive dtbo flash is proposed.
+
+## Port sources available in experimental branch
+
+`agent/p461-real-adsprpc-dtbo-forensics` carries pinned original Qualcomm
+5.10 `adsprpc.c` + `adsprpc_compat.c` and both UAPI headers as immutable
+donor copies, plus patched a52-5.10-port versions implementing true ioctl16
+array semantics for 64/32-bit. `scripts/461_graft_adsprpc_donor.py` checks
+missing APIs and stops before activation if essential headers/interfaces
+are absent; it does NOT enable FastRPC by default.
+
+Still unimplemented: GETPERF(9) compatible semantics, functional downstream
+DMA/ION/mem-buf port, lazy ADSP child SMMU attach, PDR stub semantics,
+no-peer bounded open, hardware `PD_START`, and sensor HAL tests.
+**No image with enabled FastRPC is ready for flash.**
