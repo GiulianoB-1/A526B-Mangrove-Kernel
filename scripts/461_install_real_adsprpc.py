@@ -160,14 +160,21 @@ done:
         return up ? 0 : -ENOTCONN;
     }
 ''',"PDR log only")
+    # Same internal_invoke call appears elsewhere in the donor; only
+    # annotate the actual ATTACH_SENSORS function, not unrelated invocations.
     anchor="err = fastrpc_internal_invoke(fl, FASTRPC_MODE_PARALLEL, KERNEL_MSG_WITH_ZERO_PID, &ioctl);"
-    s=replace1(s,anchor,'''if (of_machine_is_compatible("qcom,lagoon") &&
+    first=s.index("static int fastrpc_init_attach_process(")
+    last=s.index("static int fastrpc_init_create_dynamic_process(",first)
+    block=s[first:last]
+    block=replace1(block,anchor,'''if (of_machine_is_compatible("qcom,lagoon") &&
         init->flags==FASTRPC_INIT_ATTACH_SENSORS)
         pr_info("P461 FASTRPC PD_START begin cid=%d\\n", fl->cid);
     '''+anchor+'''
     if (of_machine_is_compatible("qcom,lagoon") &&
         init->flags==FASTRPC_INIT_ATTACH_SENSORS)
-        pr_info("P461 FASTRPC PD_START result=%d\\n", err);''',"sensors PD outcome")
+        pr_info("P461 FASTRPC PD_START result=%d\\n", err);''',
+                   "sensors PD outcome")
+    s=s[:first]+block+s[last:]
     # P461 scope explicitly excludes CDSP CMA/minidump allocation at init.
     s=replace1(s,"if (i == CDSP_DOMAIN_ID) {",
        'if (i == CDSP_DOMAIN_ID && !of_machine_is_compatible("qcom,lagoon")) {',
