@@ -142,7 +142,7 @@ The boot-v2 artifact has `recovery_dtbo_size=0` and does NOT supply a
 standalone dtbo partition. Do not guess which DTBO is flashed.
 
 Capture the real partition + live FDT:
-`scripts/461_dump_flushed_dtbo_windows.cmd` (Windows CMD, read-only).
+`scripts/461_dump_flashed_dtbo_windows.cmd` (Windows CMD, read-only).
 Compare offline with `scripts/461_dtbo_live_audit.py --boot <image>
 --dtbo <dump> --live <live.dtb> --out <directory>`.
 The inspector extracts all DTBO table entries, optional decompiled DTS
