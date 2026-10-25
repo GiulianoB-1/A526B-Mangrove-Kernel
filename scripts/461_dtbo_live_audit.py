@@ -14,7 +14,7 @@ def u32(b,i,be=True):return struct.unpack_from(">I" if be else "<I",b,i)[0]
 def fdt(data):
     if len(data)<40 or u32(data,0)!=FDT_MAGIC:raise ValueError("not an FDT")
     head=struct.unpack_from(">10I",data)
-    _,size,ofs,ofs_strings,_,_,_,size_strings,size_struct=head
+    _,size,ofs,ofs_strings,_,_,_,_,size_strings,size_struct=head
     if size>len(data) or ofs+size_struct>size or ofs_strings+size_strings>size:
         raise ValueError("invalid FDT sections")
     out={};stack=[];pos=ofs
