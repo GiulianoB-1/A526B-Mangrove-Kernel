@@ -3,7 +3,7 @@ run-name: P460B TG opt-in default off, guard 2s, QUSB rails, ECC48, DSP frozen
 on:
   push:
     branches:
-      - agent/p460b-safe-integration
+      - agent/p461-fastrpc-abi-audit-ecc48
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -256,7 +256,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -910,6 +910,17 @@ jobs:
               | tee phase447b-variants/P448-GLINK-QRTR-BOOT-AUDIT.txt
             cat phase447b-variants/P448-GLINK-QRTR-BOOT-AUDIT.txt >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [ "${{ matrix.variant.id }}" = G ]; then
+            # P461 checks EXACTLY the file uploaded as the combined boot.img.
+            # Reject an intermediate ECC48 proof if later repacking replaced it.
+            FINAL_G="phase447b-variants/MANGROVE-P458-DSP-SCM-ON-DEMAND.boot.img"
+            cmp "$MANGROVE_BOOT" "$FINAL_G"
+            python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
+              --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
+              --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
+              | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
+            cat phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload Phase446i GKI failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -1037,6 +1048,10 @@ jobs:
             docs/p458-dsp-deferred-device-audit.md
             phase447b-variants/P458-RAMOOPS-DTB-MANIFEST.json
             phase447b-variants/P458-RAMOOPS-BOOT-AUDIT.txt
+            phase447b-variants/P461-FINAL-BOOT-ECC48.dtb
+            phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json
+            phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
+            scripts/461_final_boot_ecc48_gate.py
             phase447b-variants/compiled-variant.json
             phase447b-variants/READ-BEFORE-FLASH.txt
             phase447b-variants/P448-IPC-BOOT-AUDIT.txt
