@@ -6771,14 +6771,6 @@ bail:
  * one attribute per ioctl. The structures are *not* interchangeable.
  * Do not alias the command numbers or return an invented success.
  */
-#define A52_FASTRPC_LEGACY_DSP_ATTRIBUTES 256
-struct a52_fastrpc_legacy_dsp_capabilities {
-	u32 domain;
-	u32 dsp_attributes[A52_FASTRPC_LEGACY_DSP_ATTRIBUTES];
-};
-#define A52_FASTRPC_IOCTL_GET_DSP_INFO_LEGACY \
-	_IOWR('R', 16, struct a52_fastrpc_legacy_dsp_capabilities)
-
 static int a52_fastrpc_legacy_get_dsp_info(void __user *param,
 					  struct fastrpc_file *fl)
 {
