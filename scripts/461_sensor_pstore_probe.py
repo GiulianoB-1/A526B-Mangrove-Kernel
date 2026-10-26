@@ -26,11 +26,13 @@ def run(root,check=False):
 			pr_info("P461 PSTORE OF_RAMOOPS node=%pOF available=%d pdev=%p\\n",
 				node, of_device_is_available(node), pdev);
 	}''',"OF reserved-memory population")
+        # Preserve kernel C89 declaration order: insert marker after all
+        # existing locals, not between opening brace and first declaration.
         g=change(g,
-            'static int ramoops_probe(struct platform_device *pdev)\n{',
-            'static int ramoops_probe(struct platform_device *pdev)\n{\n'
-            '\tpr_info("P461 PSTORE RAMOOPS_PROBE node=%pOF\\n", pdev->dev.of_node);',
-            "ramoops entry")
+            '\tint err = -EINVAL;\n',
+            '\tint err = -EINVAL;\n'
+            '\tpr_info("P461 PSTORE RAMOOPS_PROBE node=%pOF\\n", pdev->dev.of_node);\n',
+            "ramoops entry after local declarations")
         g=change(g,
             '\terr = pstore_register(&cxt->pstore);',
             '\tpr_info("P461 PSTORE RAMOOPS_REGISTER attempt ecc=%u mem=%pa bytes=%zu\\n",\n'
