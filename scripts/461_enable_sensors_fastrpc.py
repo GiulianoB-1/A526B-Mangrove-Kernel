@@ -76,7 +76,22 @@ static int a52_fastrpc_unsupported(const char *feature)
                         feature);
     return -EOPNOTSUPP;
 }
-#define hyp_assign_phys(...) a52_fastrpc_unsupported("hyp-assign")
+/* Typed rejection evaluates every caller argument; unlike the old variadic
+ * macro it does not create unused locals under Clang -Werror.
+ * No assignment to remote VMs is performed.
+ */
+static int a52_fastrpc_hyp_assign_blocked(phys_addr_t addr, u64 size,
+		const void *src, int src_count, const int *dst,
+		const int *permissions, int dst_count)
+{
+	pr_warn_ratelimited("P461 FASTRPC UNSUPPORTED hyp-assign addr=%pa size=%llu src=%d dst=%d rc=-EOPNOTSUPP\n",
+			    &addr, size, src_count, dst_count);
+	(void)src;
+	(void)dst;
+	(void)permissions;
+	return -EOPNOTSUPP;
+}
+#define hyp_assign_phys a52_fastrpc_hyp_assign_blocked
 #define msm_minidump_enabled() false
 #define dump_enabled() false
 '''
@@ -123,9 +138,9 @@ static int a52_fastrpc_unsupported(const char *feature)
     # for audio memory-region unless separate wave ports it.
     a=s.index('\tif (of_device_is_compatible(dev->of_node,\n\t\t\t\t\t"qcom,msm-adsprpc-mem-region")) {')
     b=s.index('\tme->legacy_remote_heap =',a)
-    s=s[:a]+'''    if (of_device_is_compatible(dev->of_node,
-                    "qcom,msm-adsprpc-mem-region"))
-        return a52_fastrpc_unsupported("audio-remote-heap");
+    s=s[:a]+'''	if (of_device_is_compatible(dev->of_node,
+					"qcom,msm-adsprpc-mem-region"))
+		return a52_fastrpc_unsupported("audio-remote-heap");
 
 '''+s[b:]
     # Use normal DMA-BUF API, NOT mem-buf ownership heuristics.
@@ -203,8 +218,8 @@ static int a52_fastrpc_unsupported(const char *feature)
     # accidentally select a high-security context bank.
     s=body_replace(s,"fastrpc_session_alloc_locked",lambda f:replace_once(
         f,"\tif (chan->sesscount) {",
-        '''    if (secure)
-        return a52_fastrpc_unsupported("secure-CB-session");
+        '''	if (secure)
+		return a52_fastrpc_unsupported("secure-CB-session");
 \tif (chan->sesscount) {''',"secure CB fail-closed"))
 
     # Platform app boot should not pre-provision CDSP or SSR/PDR services.
@@ -340,11 +355,11 @@ unlock:
     s=body_replace(s,"fastrpc_get_info",
         lambda f:replace_once(f,
             '\tfastrpc_get_process_gids(&fl->gidlist);',
-            '''    if (cid != ADSP_DOMAIN_ID)
-        return a52_fastrpc_unsupported("non-ADSP-domain");
-    err = a52_fastrpc_populate_on_first_session();
-    if (err)
-        goto bail;
+            '''	if (cid != ADSP_DOMAIN_ID)
+		return a52_fastrpc_unsupported("non-ADSP-domain");
+	err = a52_fastrpc_populate_on_first_session();
+	if (err)
+		goto bail;
 \tfastrpc_get_process_gids(&fl->gidlist);''',
             "first-session attach setup"))
     # Parent platform probe must not instantiate CB children at boot.
