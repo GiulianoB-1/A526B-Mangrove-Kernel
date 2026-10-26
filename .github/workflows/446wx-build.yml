@@ -83,6 +83,10 @@ jobs:
           python3 scripts/f0_bisect_ar_idle.py --help >/dev/null
           python3 scripts/f0_bisect_stage_guard.py --help >/dev/null
           python3 -m py_compile scripts/446_apply_heartbeat_cb2.py scripts/446b_apply_heartbeat_fixes.py scripts/446c_apply_takeover_window.py scripts/446g_apply_te_irq_test.py scripts/446h_apply_panel_f0_microscope.py scripts/446i_apply_passive_f0_twin.py scripts/446d_apply_power_clock_microscope.py scripts/446d_apply_capacity_guard.py scripts/446d_apply_extra_observers.py scripts/decode_phase446.py scripts/decode_phase446d.py scripts/decode_phase446g.py scripts/decode_phase446_pair.py scripts/446_append_boot_cmdline.py scripts/446j_apply_dispcc_misc.py scripts/u1_port_legacy_qusb2_phy.py scripts/u1_patch_boot_dtb.py scripts/u2_apply_gki_usb_composite_handover.py scripts/38_repack_a52_p1_boot.py
+          # P461: exercise pinned donor transformer before the costly
+          # source restore; no actual kernel source needed for this test.
+          python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py
+          python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 scripts/446_apply_heartbeat_cb2.py --help >/dev/null
           python3 scripts/446b_apply_heartbeat_fixes.py --help >/dev/null
           python3 scripts/446c_apply_takeover_window.py --help >/dev/null
