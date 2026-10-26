@@ -1,11 +1,12 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P462 WDT s2idle null-safe, live ramoops canonical ECC48, oops panic10, P460B frozen
+run-name: P463 H0 charger guard PM-safe freezable work, P460B P457 frozen
 on:
   push:
     branches:
       - agent/p461-fastrpc-abi-audit-ecc48
       - agent/p461-real-adsprpc-dtbo-forensics
       - agent/p462-s2idle-wdt-pstore-live
+      - agent/p463-charger-guard-suspend-safe
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -258,7 +259,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/463_guard_suspend_safe.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -275,6 +276,12 @@ jobs:
             python3 scripts/462_pm_probe_bypass_audit.py --root "$ROOT" \
               --out phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
             cat phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+            # P463: guard is freezable and drains before device suspend.
+            # This is deliberately separate from the P461 FastRPC changes.
+            python3 scripts/463_guard_suspend_safe.py --root "$ROOT" \
+              --report phase447-inventory/P463-GUARD-PM-SAFETY.json
+            python3 scripts/463_guard_suspend_safe.py --root "$ROOT" --check-only
+            echo 'P463 CHG_GUARD PM notifier+freezable worker source gate PASS; hardware NOT VERIFIED' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
             python3 scripts/461_graft_adsprpc_donor.py --root "$ROOT" \
@@ -1089,13 +1096,15 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P462-WDT-S2IDLE-ECC48-${{ github.run_number }}
+          name: MANGROVE-P463-GUARD-PM-S2IDLE-${{ github.run_number }}
           path: |
             phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img
             scripts/460b_apps_smmu_tg.py
             scripts/462_wdt_pm_safety.py
             scripts/462_pm_probe_bypass_audit.py
             scripts/462_live_ramoops_authoritative.py
+            scripts/463_guard_suspend_safe.py
+            phase447-inventory/P463-GUARD-PM-SAFETY.json
             phase447-inventory/P462-WDT-PM-SAFETY.json
             phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
             phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md
