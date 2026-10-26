@@ -36,7 +36,10 @@ def check(dtb):
         raise RuntimeError("P461 unexpected ramoops identity "+str(r))
     edges=[p for p,v in tree.items()
            if b"qcom,msm-fastrpc-rpmsg" in v.get("compatible",b"").split(b"\0")]
-    adsp=[p for p in edges if "adsp" in p.lower() and
+    # TG's actual ADSP edge is named qcom,lpass@3000000, not "adsp".
+    # Require that exact parent and channel, excluding modem/CDSP edges.
+    adsp=[p for p in edges if
+          p.startswith("/soc/qcom,lpass@3000000/glink-edge/") and
           module.strings(tree[p].get("qcom,glink-channels",b""))==["fastrpcglink-apps-dsp"]]
     if len(adsp)!=1:
         raise RuntimeError("P461 ADSP FastRPC RPMSG missing/ambiguous: "+str(edges))
