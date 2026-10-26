@@ -20,7 +20,7 @@ def replace_once(s,old,new,why):
 
 def func(s,name):
     # Function definitions, not prototypes: match '{' on declaration.
-    pat=r"(?m)^(?:static\s+)?(?:int|void|long|bool|ssize_t|irqreturn_t)\s+(?:__\w+\s+)?"+re.escape(name)+r"\s*\([^;{}]*?\)\s*\{"
+    pat=r"(?m)^(?:static\s+)?(?:(?:inline|__always_inline|__maybe_unused|__init)\s+)*(?:int|void|long|bool|ssize_t|irqreturn_t)\s+(?:__\w+\s+)?"+re.escape(name)+r"\s*\([^;{}]*?\)\s*\{"
     m=re.search(pat,s,re.S)
     if m is None:raise RuntimeError(f"P461 function absent: {name}")
     depth=0;start=m.end()-1;i=start
@@ -253,7 +253,7 @@ static int a52_fastrpc_unsupported(const char *feature)
 {
     if (fl && fl->cid == ADSP_DOMAIN_ID && sloc_name &&
         !strcmp(sloc_name, SENSORS_PDR_ADSP_SERVICE_LOCATION_CLIENT_NAME)) {
-        pr_info_once("P461 FASTRPC PDR STATUS bypassed for ADSP sensor RPC; real INIT RPC required\n");
+        pr_info_once("P461 FASTRPC PDR STATUS bypassed for ADSP sensor RPC; real INIT RPC required\\n");
         return 0;
     }
     return a52_fastrpc_unsupported("PDR status");
@@ -278,7 +278,7 @@ static int a52_fastrpc_unsupported(const char *feature)
         lambda _:'''static void fastrpc_get_cdsp_status(struct fastrpc_apps *me)
 {
     me->fastrpc_cdsp_status = 0;
-    pr_info_once("P461 FASTRPC CDSP unsupported rc=-EOPNOTSUPP\n");
+    pr_info_once("P461 FASTRPC CDSP unsupported rc=-EOPNOTSUPP\\n");
 }''')
     # No PDR/SSR registration means no callback. RPMSG remove is the
     # only signal that the ADSP peer is gone. Do not build notifier code
@@ -358,7 +358,7 @@ unlock:
             '''    if (of_device_is_compatible(dev->of_node,
                "qcom,msm-fastrpc-compute")) {
         a52_fastrpc_compute_dev = dev;
-        pr_info("P461 FASTRPC PROBE parent=%s ADSP CB attach deferred\n",
+        pr_info("P461 FASTRPC PROBE parent=%s ADSP CB attach deferred\\n",
                 dev_name(dev));
     }''',
             "defer SMMU child population"))
@@ -366,7 +366,7 @@ unlock:
     s=body_replace(s,"fastrpc_device_open",lambda f:replace_once(
         f,'\tVERIFY(err, ((dev_minor == MINOR_NUM_DEV) ||',
         '''    if (!READ_ONCE(gcinfo[ADSP_DOMAIN_ID].rpdev)) {
-        pr_warn_ratelimited("P461 FASTRPC OPEN rc=-ENOTCONN ADSP_DOWN\n");
+        pr_warn_ratelimited("P461 FASTRPC OPEN rc=-ENOTCONN ADSP_DOWN\\n");
         return -ENOTCONN;
     }
 \tVERIFY(err, ((dev_minor == MINOR_NUM_DEV) ||''',
@@ -385,7 +385,7 @@ unlock:
         ret = wait_for_completion_interruptible_timeout(
             &ctx->work, msecs_to_jiffies(5000));
     if (ret == 0) {
-        pr_warn_ratelimited("P461 FASTRPC RPC wait timeout 5000ms rc=-ETIMEDOUT\n");
+        pr_warn_ratelimited("P461 FASTRPC RPC wait timeout 5000ms rc=-ETIMEDOUT\\n");
         return -ETIMEDOUT;
     }
     return ret < 0 ? (int)ret : 0;
