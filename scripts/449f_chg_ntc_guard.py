@@ -86,10 +86,23 @@ def check(root):
         # H0 refuses all charging while it remains set.
         for marker in ("fg->a52g_inhibit_latched=true;",
                        "if(fg->a52g_inhibit_latched)",
-                       'a52h0_off(fg,"guard",false);',
-                       "if(a52g_sample(fg,false)<0)"):
+                       'a52h0_off(fg,"guard",false);'):
             if marker not in s:
                 raise RuntimeError("P449 H0 guard-first latch contract missing "+marker)
+        if "P463 CHG_GUARD PM_SYNC" in s:
+            poll=s[s.index("static void a52g_poll("):
+                   s.index("static enum power_supply_property a52d_props[]")]
+            for marker in ("err = a52g_sample(fg, false);",
+                           "if (err < 0)", "a52h0_tick(fg);",
+                           "mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work"):
+                if marker not in poll:
+                    raise RuntimeError("P449 P463 guard-first contract missing "+marker)
+            if not (poll.index("err = a52g_sample(fg, false);") <
+                    poll.index("if (err < 0)") <
+                    poll.index("a52h0_tick(fg);")):
+                raise RuntimeError("P449 P463 unsafe H0 tick before guard")
+        elif "if(a52g_sample(fg,false)<0)" not in s:
+            raise RuntimeError("P449 original guard-first error handling missing")
     elif "fg->a52g_inhibit_latched=true;" not in s:
         raise RuntimeError("P449 DAILY must retain latched guard")
     if "A52G_CHG_ENQ4FET" not in s or "ctrl & ~A52G_CHG_ENQ4FET" not in s:
