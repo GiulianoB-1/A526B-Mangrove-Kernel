@@ -85,12 +85,19 @@ def main():
         # P449: explicit run-time initcall evidence for the next IPC stage.
         # ABL truncates extra cmdline; keep this in the PRIMARY field.
         critical.append("initcall_debug")
+    if x.variant == "G":
+        # P462 hardware s2idle testing: turn an Oops into a 10-second reboot,
+        # instead of the P460b panic=0 frozen phone. Keep in PRIMARY ABL args.
+        critical[critical.index("panic=0")] = "panic=10"
+        critical.append("oops=panic")
     for item in critical[:6]:
         if item not in words:
             raise RuntimeError("P447C missing previously generated must-keep "+item)
     # All ramoops sizes/phys_addr live in the checked DT reserved-memory node.
     omit={"console=null","initcall_debug","ignore_loglevel","loglevel=8",
           "panic=1","pstore.compress=none","pstore.backend=ramoops"}
+    if x.variant == "G":
+        omit.add("panic=0")
     remain=[]
     for word in words:
         if word in critical or word in omit or word.startswith("ramoops."):
@@ -127,6 +134,11 @@ def main():
     if built[:CMD_OFF]!=blob[:CMD_OFF] or built[CMD_OFF+CMD_LEN:EXTRA_OFF]!=blob[CMD_OFF+CMD_LEN:EXTRA_OFF] or built[EXTRA_OFF+EXTRA_LEN:]!=blob[EXTRA_OFF+EXTRA_LEN:]:
         raise RuntimeError("P447C changed bytes outside two cmdline fields")
     primary_args=p1.split()
+    if x.variant == "G":
+        if "panic=10" not in primary_args or "oops=panic" not in primary_args or "panic=0" in primary_args:
+            raise RuntimeError("P462 G sleep-test Oops reboot cmdline not in ABL PRIMARY")
+        if "panic=0" in xtra.split():
+            raise RuntimeError("P462 G extra cmdline retained panic=0")
     if not all(k in primary_args for k in critical):
         raise RuntimeError("P447C primary args lost")
     if x.variant not in ("F","G") and b"initcall_debug" in built[CMD_OFF:CMD_OFF+CMD_LEN]:

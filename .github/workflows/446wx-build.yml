@@ -1,10 +1,11 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P460B TG opt-in default off, guard 2s, QUSB rails, ECC48, DSP frozen
+run-name: P462 WDT s2idle null-safe, live ramoops canonical ECC48, oops panic10, P460B frozen
 on:
   push:
     branches:
       - agent/p461-fastrpc-abi-audit-ecc48
       - agent/p461-real-adsprpc-dtbo-forensics
+      - agent/p462-s2idle-wdt-pstore-live
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -257,7 +258,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -265,6 +266,16 @@ jobs:
           python3 scripts/458_dsp_runtime_scm.py --root "$ROOT"
           python3 scripts/460b_apps_smmu_tg.py --root "$ROOT"
           python3 scripts/460b_apps_smmu_tg.py --root "$ROOT" --check-only
+          if [ "${{ matrix.variant.id }}" = G ]; then
+            # P462: 17c10000.qcom,wdt diagnostic-disabled probe MUST NOT bind
+            # with NULL drvdata and still expose qcom_wdt_suspend/resume.
+            python3 scripts/462_wdt_pm_safety.py --root "$ROOT" \
+              --report phase447-inventory/P462-WDT-PM-SAFETY.json
+            python3 scripts/462_wdt_pm_safety.py --root "$ROOT" --check-only
+            python3 scripts/462_pm_probe_bypass_audit.py --root "$ROOT" \
+              --out phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
+            cat phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "${{ matrix.variant.id }}" = G ]; then
             python3 scripts/461_graft_adsprpc_donor.py --root "$ROOT" \
               --report phase447-inventory/P461-ADSPRPC-PORT-BLOCKERS.json
@@ -839,6 +850,19 @@ jobs:
             unpack_bootimg --boot_img "$(find phase447b-variants -name '*.boot.img' -type f -print -quit)" --out /tmp/p447c-unpack | head -n 45
           fi
           cat phase447b-variants/READ-BEFORE-FLASH.txt >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ matrix.variant.id }}" = G ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path("phase447b-variants/compiled-variant.json").read_text())
+          primary=p["primary_cmdline"].split()
+          assert "oops=panic" in primary and "panic=10" in primary and "panic=0" not in primary
+          assert "panic=0" not in p["extra_cmdline"].split()
+          print("P462 OOPS RECOVERY CMDLINE PASS panic=10 oops=panic in ABL PRIMARY")
+          PY
+            grep -aFq 'P462 WDT DIAG_SKIP no_bind_rc=-ENODEV' workspace/gki-phase199-out/arch/arm64/boot/Image
+            echo 'P462 WDT linked PASS: no-bind diagnostic path and PM NULL guards' >> "$GITHUB_STEP_SUMMARY"
+          fi
           case "${{ matrix.variant.id }}" in
             A) ORIGINAL_BOOT="phase447b-variants/A-wave2-battery-only.boot.img" ;;
             B) ORIGINAL_BOOT="phase447b-variants/B-wave3-dsp-no-mss.boot.img" ;;
@@ -892,7 +916,17 @@ jobs:
             python3 scripts/458_dsp_disabled_scm_dtb.py --boot "$MANGROVE_BOOT" --check-only \
               | tee phase447b-variants/P458-DSP-DISABLED-SCM-AUDIT.txt
             echo 'P458 runtime-only acceptance: no boot-time firmware:scm, no Venus/NPU load, 4 deferred devices, manual ADSP start only' >> "$GITHUB_STEP_SUMMARY"
-            echo 'P458 pstore runtime acceptance (NOT CI-verified): pstore: Registered ramoops' >> "$GITHUB_STEP_SUMMARY"
+            # P462 authoritative TG live-name *candidate*: the DTBO idx=1
+            # adds ramoops@B1B00000; avoid boot DTB's second a52-reserved
+            # active node. Retain exact TG 4x256KiB sizes, add ECC48 there.
+            # DO NOT claim live acceptance until collector v1.20 dump.
+            python3 scripts/462_live_ramoops_authoritative.py --boot "$MANGROVE_BOOT" \
+              --output phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img \
+              --report phase447b-variants/P462-RAMOOPS-CANONICAL.json
+            MANGROVE_BOOT="phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img"
+            python3 scripts/462_live_ramoops_authoritative.py --boot "$MANGROVE_BOOT" --check-only \
+              | tee phase447b-variants/P462-RAMOOPS-CANONICAL-AUDIT.txt
+            echo 'P462 pstore ACCEPT ONLY at runtime: 1 live ramoops@B1B00000 ECC48, pstore: Registered; DTBO idx=1 not CI proved' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = E ]; then
             cp "$MANGROVE_BOOT" phase447b-variants/MANGROVE-449-DAILY.boot.img
@@ -919,7 +953,7 @@ jobs:
           if [ "${{ matrix.variant.id }}" = G ]; then
             # P461 checks EXACTLY the file uploaded as the combined boot.img.
             # Reject an intermediate ECC48 proof if later repacking replaced it.
-            FINAL_G="phase447b-variants/MANGROVE-P458-DSP-SCM-ON-DEMAND.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img"
             cmp "$MANGROVE_BOOT" "$FINAL_G"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
@@ -1055,10 +1089,18 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P460B-TG-EXPERIMENT-${{ github.run_number }}
+          name: MANGROVE-P462-WDT-S2IDLE-ECC48-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P458-DSP-SCM-ON-DEMAND.boot.img
+            phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img
             scripts/460b_apps_smmu_tg.py
+            scripts/462_wdt_pm_safety.py
+            scripts/462_pm_probe_bypass_audit.py
+            scripts/462_live_ramoops_authoritative.py
+            phase447-inventory/P462-WDT-PM-SAFETY.json
+            phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
+            phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md
+            phase447b-variants/P462-RAMOOPS-CANONICAL.json
+            phase447b-variants/P462-RAMOOPS-CANONICAL-AUDIT.txt
             phase447b-variants/P458-DSP-DISABLED-SCM-DTB.json
             phase447b-variants/P458-DSP-DISABLED-SCM-AUDIT.txt
             docs/p458-dsp-deferred-device-audit.md
