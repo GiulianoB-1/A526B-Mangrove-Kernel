@@ -417,6 +417,91 @@ unlock:
     s=body_replace(s,"fastrpc_probe",lambda f:replace_once(
         f,"\tint ret = 0;\n","","drop unused audio remoteheap ret variable"))
 
+    # The A52 vendor ADSP remoteproc is 3000000.qcom,lpass. The
+    # sm8450 donor accepts "adsp" but not this A52 "lpass" edge. All
+    # rpmsg probe/remove/receive paths use get_cid_from_rpdev(), so fix
+    # the common lookup, NOT just probe; never rename the GLINK channel.
+    s=body_replace(s,"get_cid_from_rpdev",lambda _:r'''static inline int get_cid_from_rpdev(struct rpmsg_device *rpdev)
+{
+    const char *label = NULL;
+    const char *pname = "<none>";
+    struct device *parent;
+    struct device_node *np;
+    bool lpass_3000000 = false;
+    int depth = 0, cid = -1;
+
+    if (!rpdev || !rpdev->dev.parent)
+        return -ENODEV;
+    parent = rpdev->dev.parent;
+    np = parent->of_node;
+    if (np) {
+        if (of_property_read_string(np, "label", &label))
+            label = np->name;
+        pname = np->full_name;
+    }
+    for (; parent && depth < 6; parent = parent->parent, depth++) {
+        const char *dn = dev_name(parent);
+
+        if ((dn && strstr(dn, "3000000.qcom,lpass")) ||
+            (parent->of_node &&
+             strstr(parent->of_node->full_name, "qcom,lpass@3000000")))
+            lpass_3000000 = true;
+    }
+    if (label && !strcmp(label, "adsp"))
+        cid = ADSP_DOMAIN_ID;
+    else if (label && !strcmp(label, "lpass") && lpass_3000000)
+        cid = ADSP_DOMAIN_ID;
+    else if (lpass_3000000)
+        cid = ADSP_DOMAIN_ID;
+    else if (label && !strcmp(label, "cdsp"))
+        cid = CDSP_DOMAIN_ID;
+    else if (label && !strcmp(label, "slpi"))
+        cid = SDSP_DOMAIN_ID;
+    else if (label && !strcmp(label, "mdsp"))
+        cid = MDSP_DOMAIN_ID;
+
+    dev_info_once(&rpdev->dev,
+                  "P461 FASTRPC DOMAIN label=%s parent=%s rpdev=%s lpass3000000=%d cid=%d\n",
+                  label ? label : "<none>", pname,
+                  dev_name(&rpdev->dev), lpass_3000000, cid);
+    return cid;
+}''')
+    # The donor's secure-domains=0xf indicates secure DSP *channels*,
+    # not that only /dev/adsprpc-smd-secure may access non-secure ADSP
+    # sensorsPD. Permit GETINFO for that single domain/nonsecure minor.
+    # Keep all other secure-domain checks unchanged.
+    s=body_replace(s,"fastrpc_get_info",lambda f:replace_once(
+        f,
+        '''if (chan->secure == SECURE_CHANNEL
+            && !chan->unsigned_support)''',
+        '''if (chan->secure == SECURE_CHANNEL
+            && !chan->unsigned_support && cid != ADSP_DOMAIN_ID)''',
+        "ADSP nonsecure GETINFO exemption"))
+    # INIT_ATTACH_SENSORS uses the real RPC to sensorsPD and must work
+    # after the non-secure node selected the ADSP channel. Do NOT open
+    # generic signed-PD INIT_ATTACH or CREATE on the nonsecure minor.
+    s=body_replace(s,"fastrpc_init_attach_process",lambda f:replace_once(
+        f,
+        '''if (fl->dev_minor == MINOR_NUM_DEV) {''',
+        '''if (fl->dev_minor == MINOR_NUM_DEV &&
+        (fl->cid != ADSP_DOMAIN_ID ||
+         init->flags != FASTRPC_INIT_ATTACH_SENSORS)) {''',
+        "permit only nonsecure ADSP ATTACH_SENSORS"))
+    s=body_replace(s,"fastrpc_init_attach_process",lambda f:replace_once(
+        f,
+        '''if (init->flags == FASTRPC_INIT_ATTACH)
+        fl->pd = 0;''',
+        '''if (init->flags == FASTRPC_INIT_ATTACH)
+        fl->pd = 0;''',
+        "retain regular attach"))
+    s=body_replace(s,"fastrpc_rpmsg_probe",lambda f:replace_once(
+        f,
+        "cid = get_cid_from_rpdev(rpdev);",
+        '''cid = get_cid_from_rpdev(rpdev);
+    if (cid == ADSP_DOMAIN_ID)
+        dev_info(&rpdev->dev, "P461 FASTRPC RPMSG ADSP ACCEPT transport=lpass/adsp cid=%d\n",
+                 cid);''',
+        "log ADSP RPMSG acceptance"))
     # ADSP is the *only* supported peer. Registered RPMSG devices for CDSP
     # or modem are explicitly rejected rather than being treated as ready.
     s=body_replace(s,"fastrpc_rpmsg_probe",lambda f:replace_once(
