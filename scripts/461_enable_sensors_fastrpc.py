@@ -305,6 +305,16 @@ def main():
             dst=a.root/h
             dst.parent.mkdir(parents=True,exist_ok=True)
             if dst.is_file() and dst.read_bytes()!=src.read_bytes():
+                if h=="include/soc/qcom/secure_buffer.h":
+                    # A52 secure baseline already carries this QCOM ABI.
+                    # Respect it: do not overwrite an unrelated subsystem
+                    # header. Required symbols are the known VMID/PERM
+                    # constants, not a live hyp_assign implementation.
+                    old=dst.read_text()
+                    required=("VMID_HLOS","PERM_READ","PERM_WRITE","PERM_EXEC")
+                    if not all(token in old for token in required):
+                        raise RuntimeError("P461 A52 native secure_buffer lacks VMID/PERM constants")
+                    continue
                 raise RuntimeError("P461 existing header incompatible: "+str(dst))
             dst.write_bytes(src.read_bytes())
     else:
