@@ -93,10 +93,9 @@ def check_h0(s):
     reject_broken_c_string_literals(s)
     if 'dev_err(fg->dev,"P452 H0 REMOVE inhibit FAILED rc=%d\\n",rc);' not in s:
         raise RuntimeError("P457 H0 teardown diagnostic must contain escaped C newline")
+    p463 = "P463 CHG_GUARD PM_SYNC" in s
     required = [
         "A52_PHASE452_H0_MANUAL_SAFE_CHARGER_V1",
-        "if(a52g_sample(fg,false)<0)",
-        "else a52h0_tick(fg);",
         "fg->a52h0_state=\"OFF\";",
         'a52h0_off(fg,"BOOT_PRE_ARM",false);',
         'static DEVICE_ATTR(a52_h0_enable,0600,h0_arm_show,h0_arm_store);',
@@ -110,6 +109,16 @@ def check_h0(s):
         "P452 H0 WDT expired clear FAILED",
         'a52h0_off(fg,"WDT_KICK_FAILED",true)',
     ]
+    if not p463:
+        required += ["if(a52g_sample(fg,false)<0)",
+                     "else a52h0_tick(fg);"]
+    else:
+        required += ["case PM_SUSPEND_PREPARE:",
+                     "case PM_POST_SUSPEND:",
+                     "cancel_delayed_work_sync(&fg->a52g_guard_work)",
+                     "mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work",
+                     "P463 CHG_GUARD SUSPEND_INFLIGHT",
+                     "P463 CHG_GUARD POST_RESUME_IO"]
     for marker in required:
         if marker not in s:
             raise RuntimeError("P457 H0 review contract missing: " + marker)
@@ -190,9 +199,27 @@ def check_h0(s):
         raise RuntimeError("P460B H0 must not override 2s guard cadence")
     if "#define A52H0_KICK_MIN_MS 10000" not in s:
         raise RuntimeError("P460B H0 watchdog min kick must be 10 seconds")
-    if not (poll.index("if(a52g_sample(fg,false)<0)") <
-            poll.index("else a52h0_tick(fg)") <
-            poll.index("msecs_to_jiffies(A52G_GUARD_POLL_MS)")):
+    if p463:
+        # Exactly the same mandatory guard-before-H0 sequencing, with a
+        # stronger PM boundary: cancellation before device suspend,
+        # freezable WQ, and no H0 tick on a failed guard sample.
+        if not (poll.index("err = a52g_sample(fg, false);") <
+                poll.index("if (err < 0)") <
+                poll.index("a52h0_tick(fg);") <
+                poll.index("mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work")):
+            raise RuntimeError("P463 guard must sample before H0 tick and requeue")
+        if not (poll.index("READ_ONCE(fg->a52g_pm_paused)") <
+                poll.index("err = a52g_sample(fg, false);")):
+            raise RuntimeError("P463 PM pause must precede charger I2C sample")
+        pm=s[s.index("static int a52g_pm_notify("):s.index("static void a52g_poll(")]
+        if not (pm.index("WRITE_ONCE(fg->a52g_pm_paused, true)") <
+                pm.index("cancel_delayed_work_sync(&fg->a52g_guard_work)") <
+                pm.index("case PM_POST_SUSPEND:") <
+                pm.index("mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work, 0)")):
+            raise RuntimeError("P463 notifier must cancel before suspend and queue immediate resume sample")
+    elif not (poll.index("if(a52g_sample(fg,false)<0)") <
+              poll.index("else a52h0_tick(fg)") <
+              poll.index("msecs_to_jiffies(A52G_GUARD_POLL_MS)")):
         raise RuntimeError("P460B H0 P449 guard must run before H0 tick and reschedule")
     active=tick[tick.index("if(fg->a52h0_active) {"):tick.index("if(fg->a52h0_timer_started &&")]
     if active.count("a52h0_write_masked(fg,A52H0_WDTCNTL,BIT(3),BIT(3))")!=1:
@@ -225,7 +252,9 @@ def check_h0(s):
         raise RuntimeError("P458 H0 BOOT_PRE_ARM OFF error must latch H0 killed")
     if init.index('a52h0_off(fg,"BOOT_PRE_ARM",false)') > init.index("if(!fg->a52h0_killed)"):
         raise RuntimeError("P458 H0 boot handover inhibit must be checked before optional registrations")
-    if "schedule_delayed_work(&fg->a52g_guard_work" not in probe[p1:]:
+    pm_queue=("mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work"
+              if p463 else "schedule_delayed_work(&fg->a52g_guard_work")
+    if pm_queue not in probe[p1:]:
         raise RuntimeError("P457 H0 init may suppress periodic P449 guard")
     if "if(fg->a52h0_killed)return" in probe:
         raise RuntimeError("P457 H0 killed state cannot prevent FG probe")
