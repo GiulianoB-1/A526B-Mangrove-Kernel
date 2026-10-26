@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P461 sensors downstream 5.10 ADSP FastRPC, G ECC48 pstore probe, P462 frozen
+run-name: P464 combined P461 round-2 FastRPC and P463 PM-safe guard, ECC48, P460B frozen
 on:
   push:
     branches:
@@ -7,6 +7,7 @@ on:
       - agent/p461-real-adsprpc-dtbo-forensics
       - agent/p462-s2idle-wdt-pstore-live
       - agent/p461-sensors-adsprpc-active
+      - agent/p464-fastrpc-p463-guard-combined
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -263,7 +264,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -280,6 +281,14 @@ jobs:
             python3 scripts/462_pm_probe_bypass_audit.py --root "$ROOT" \
               --out phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
             cat phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+            # P464: apply the successful P463 PM-safe charger guard to the
+            # SAME G tree that P461 FastRPC and pstore will compile.
+            # Keep P460B 2s thermal cadence, 10s WDT kick, H0 manual arm,
+            # P457 SMMU and Phase206/SCM/ADSP overrides unchanged.
+            python3 scripts/463_guard_suspend_safe.py --root "$ROOT" \
+              --report phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
+            python3 scripts/463_guard_suspend_safe.py --root "$ROOT" --check-only
+            echo 'P464 same G source: P463 guard PM notifier/freezable worker active before P461 FastRPC generation' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
             # P461 sensors-only: build real Lineage 5.10 driver and compat
@@ -884,6 +893,10 @@ jobs:
           PY
             grep -aFq 'P462 WDT DIAG_SKIP no_bind_rc=-ENODEV' workspace/gki-phase199-out/arch/arm64/boot/Image
             echo 'P462 WDT linked PASS: no-bind diagnostic path and PM NULL guards' >> "$GITHUB_STEP_SUMMARY"
+            for marker in 'P463 CHG_GUARD SUSPEND_PREPARE' 'P463 CHG_GUARD POST_SUSPEND' 'P463 CHG_GUARD POST_RESUME_IO'; do
+              grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P464 guard not linked in G Image::$marker"; exit 1; }
+            done
+            echo 'P464 linked PM-safe charger guard + P462 WDT PASS' >> "$GITHUB_STEP_SUMMARY"
             for marker in 'P461 FASTRPC PD_START cid=' 'P461 FASTRPC RPMSG UP cid=' 'P461 FASTRPC SMMU ATTACH session=' 'P461 FASTRPC ioctl=0x' 'P461 PSTORE RAMOOPS_PROBE'; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P461 unlinked driver marker::$marker"; exit 1; }
             done
@@ -1001,9 +1014,9 @@ jobs:
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
               --dtb phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
-              --output phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img \
+              --output phase447b-variants/MANGROVE-P464-FASTRPC-P463-GUARD.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P464-FASTRPC-P463-GUARD.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1124,14 +1137,16 @@ jobs:
             phase447b-variants/P453-RAMOOPS-BOOT-AUDIT.txt
           if-no-files-found: error
           compression-level: 0
-      - name: Upload MANGROVE-P458 DSP SCM on-demand (H0 OFF, PAS auto_boot OFF)
+      - name: Upload P464 ONE G boot (P461 round2 FastRPC, P463 guard suspend safe, P462 WDT)
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P461-SENSORS-ADSPRPC-${{ github.run_number }}
+          name: MANGROVE-P464-COMBINED-G-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img
+            phase447b-variants/MANGROVE-P464-FASTRPC-P463-GUARD.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
+            phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
+            scripts/463_guard_suspend_safe.py
             scripts/461_pack_adsp_sensor_boot.py
             scripts/460b_apps_smmu_tg.py
             scripts/462_wdt_pm_safety.py

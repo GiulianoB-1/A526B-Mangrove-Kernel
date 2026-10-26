@@ -177,16 +177,41 @@ def patch(s):
 def check(root):
     src=(root/SRC).read_text()
     k=(root/KCFG).read_text()
+    p463 = "P463 CHG_GUARD PM_SYNC" in src
     for marker in (TAG,"P447G CHG_GUARD SAMPLE","P447G CHG_GUARD INHIBIT_OK",
                    "P447G CHG_GUARD INHIBIT_FAILED",
                    "A52G_CHG_STATUS1 0x0d","A52G_CHG_CNTL1 0x13",
                    "A52G_CHG_ENQ4FET BIT(3)","A52G_GUARD_TEMP_DECI_C 450",
                    "I2C_FUNC_SMBUS_BYTE_DATA",
-                   "schedule_delayed_work(&fg->a52g_guard_work",
                    "cancel_delayed_work_sync(&fg->a52g_guard_work)",
                    "never_reenable=1",
                    "A52_PHASE447F_SOC_PARITY_CORRECTED_V2"):
         if marker not in src:raise RuntimeError("P447G safety contract missing "+marker)
+    if p463:
+        # Preserve the 2s emergency inhibit, but queue on a freezable WQ
+        # and synchronously drain before device suspend.
+        for marker in ("#define A52G_GUARD_POLL_MS 2000",
+                       "mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work",
+                       "case PM_SUSPEND_PREPARE:",
+                       "case PM_POST_SUSPEND:",
+                       "WRITE_ONCE(fg->a52g_pm_paused, true)",
+                       "cancel_delayed_work_sync(&fg->a52g_guard_work)",
+                       "register_pm_notifier(&fg->a52g_pm_nb)",
+                       "unregister_pm_notifier(&fg->a52g_pm_nb)",
+                       "P463 CHG_GUARD POST_RESUME_IO"):
+            if marker not in src:
+                raise RuntimeError("P447G P463 PM-safety contract missing "+marker)
+        poll=src[src.index("static void a52g_poll("):
+                 src.index("static enum power_supply_property a52d_props[]")]
+        if not (poll.index("err = a52g_sample(fg, false);") <
+                poll.index("if (err < 0)") <
+                poll.index("a52h0_tick(fg);") <
+                poll.index("mod_delayed_work(system_freezable_wq, &fg->a52g_guard_work")):
+            raise RuntimeError("P447G P463 guard-before-H0 and 2s requeue order drift")
+        if "schedule_delayed_work(&fg->a52g_guard_work" in src:
+            raise RuntimeError("P447G P463 guard still uses non-freezable system_wq")
+    elif "schedule_delayed_work(&fg->a52g_guard_work" not in src:
+        raise RuntimeError("P447G original guard 2s scheduling missing")
     if src.count("i2c_smbus_write_byte_data(")!=(2 if "A52_PHASE452_H0_MANUAL_SAFE_CHARGER_V1" in src else 1):
         raise RuntimeError("P447G exactly one charger register write site")
     if "config A52_447G_CHG_GUARD" not in k or "default y" not in k:
