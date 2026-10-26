@@ -439,6 +439,13 @@ unlock:
         "fastrpc_notify_pdr_drivers",
         "fastrpc_mmap_remove_pdr",
         "fastrpc_print_debug_data",
+        # Second-order unused helpers: their ONLY consumers were the
+        # excluded SSR/PDR callbacks or CDSP minidump printer above.
+        "fastrpc_notify_users",
+        "fastrpc_notify_users_staticpd_pdr",
+        "fastrpc_get_spd_session",
+        "fastrpc_smq_ctx_detail",
+        "fastrpc_print_fastrpcbuf",
     )
     s=replace_once(s,
         "static int fastrpc_mmap_remove_pdr(struct fastrpc_file *fl);\n",
