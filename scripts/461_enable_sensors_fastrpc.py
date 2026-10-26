@@ -472,8 +472,7 @@ unlock:
     # Keep all other secure-domain checks unchanged.
     s=body_replace(s,"fastrpc_get_info",lambda f:replace_once(
         f,
-        '''if (chan->secure == SECURE_CHANNEL
-            && !chan->unsigned_support)''',
+        '''&& !chan->unsigned_support && cid != ADSP_DOMAIN_ID) {''',
         '''if (chan->secure == SECURE_CHANNEL
             && !chan->unsigned_support && cid != ADSP_DOMAIN_ID)''',
         "ADSP nonsecure GETINFO exemption"))
@@ -487,19 +486,12 @@ unlock:
         (fl->cid != ADSP_DOMAIN_ID ||
          init->flags != FASTRPC_INIT_ATTACH_SENSORS)) {''',
         "permit only nonsecure ADSP ATTACH_SENSORS"))
-    s=body_replace(s,"fastrpc_init_attach_process",lambda f:replace_once(
-        f,
-        '''if (init->flags == FASTRPC_INIT_ATTACH)
-        fl->pd = 0;''',
-        '''if (init->flags == FASTRPC_INIT_ATTACH)
-        fl->pd = 0;''',
-        "retain regular attach"))
     s=body_replace(s,"fastrpc_rpmsg_probe",lambda f:replace_once(
         f,
         "cid = get_cid_from_rpdev(rpdev);",
         '''cid = get_cid_from_rpdev(rpdev);
     if (cid == ADSP_DOMAIN_ID)
-        dev_info(&rpdev->dev, "P461 FASTRPC RPMSG ADSP ACCEPT transport=lpass/adsp cid=%d\n",
+        dev_info(&rpdev->dev, "P461 FASTRPC RPMSG ADSP ACCEPT transport=lpass/adsp cid=%d\\n",
                  cid);''',
         "log ADSP RPMSG acceptance"))
     # ADSP is the *only* supported peer. Registered RPMSG devices for CDSP
