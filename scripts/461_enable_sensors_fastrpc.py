@@ -295,6 +295,18 @@ def main():
                           "adsprpc_shared.h":(donor/"adsprpc_shared.h").read_text()}.items():
             (target/name).write_text(data)
         mk.write_text(m);kc.write_text(k)
+        # Exact pinned donor UAPI + trace + VMID declarations, not fabricated.
+        for h in ("include/linux/fastrpc.h",
+                  "include/trace/events/fastrpc.h",
+                  "include/soc/qcom/secure_buffer.h"):
+            src=Path("vendor/p461/a52-5.10-port")/h
+            if not src.is_file():
+                raise RuntimeError("P461 missing pinned donor header "+str(src))
+            dst=a.root/h
+            dst.parent.mkdir(parents=True,exist_ok=True)
+            if dst.is_file() and dst.read_bytes()!=src.read_bytes():
+                raise RuntimeError("P461 existing header incompatible: "+str(dst))
+            dst.write_bytes(src.read_bytes())
     else:
         for name,expected in {"adsprpc.c":driver,"adsprpc_compat.c":compat}.items():
             if (target/name).read_text()!=expected:
