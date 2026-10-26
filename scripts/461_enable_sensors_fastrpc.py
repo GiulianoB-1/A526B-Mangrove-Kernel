@@ -6,7 +6,7 @@ for unsupported optional features; all DMA-BUF imports use the ADSP CB child.
 This is not runtime acceptance: CI must compile Image and hardware must
 exercise /dev/adsprpc-smd[_secure], RPMSG and ATTACH_SENSORS.
 """
-import argparse,hashlib,json,re,shutil
+import argparse,hashlib,json,re,shutil,sys
 from pathlib import Path
 
 DONOR=Path("vendor/p461/a52-5.10-port/drivers/char")
@@ -423,6 +423,18 @@ unlock:
     return s
 
 def main():
+    if "--selftest" in sys.argv:
+        # This runs on checkout-only sources in the first CI step, BEFORE
+        # the 30+ minute kernel restore/phase delta work. It exercises
+        # EVERY donor-specific replacement anchor and ioctl ABI shim.
+        driver=transform((DONOR/"adsprpc.c").read_text())
+        for marker in (MARK,"P461 FASTRPC PD_START","P461 FASTRPC SMMU ATTACH",
+                       "P461 FASTRPC ioctl=0x","P461 FASTRPC RPMSG UP",
+                       "P461 FASTRPC PDR STATUS bypassed"):
+            if marker not in driver:
+                raise RuntimeError("P461 selftest missing generated symbol "+marker)
+        print("P461 DONOR TRANSFORM SELFTEST PASS bytes="+str(len(driver)))
+        return
     ap=argparse.ArgumentParser()
     ap.add_argument("--root",type=Path,required=True)
     ap.add_argument("--config",type=Path,required=True)
