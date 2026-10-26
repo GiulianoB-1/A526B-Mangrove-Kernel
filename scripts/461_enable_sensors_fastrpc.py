@@ -472,9 +472,8 @@ unlock:
     # Keep all other secure-domain checks unchanged.
     s=body_replace(s,"fastrpc_get_info",lambda f:replace_once(
         f,
-        '''&& !chan->unsigned_support && cid != ADSP_DOMAIN_ID) {''',
-        '''if (chan->secure == SECURE_CHANNEL
-            && !chan->unsigned_support && cid != ADSP_DOMAIN_ID)''',
+        "&& !chan->unsigned_support) {",
+        "&& !chan->unsigned_support && cid != ADSP_DOMAIN_ID) {",
         "ADSP nonsecure GETINFO exemption"))
     # INIT_ATTACH_SENSORS uses the real RPC to sensorsPD and must work
     # after the non-secure node selected the ADSP channel. Do NOT open
