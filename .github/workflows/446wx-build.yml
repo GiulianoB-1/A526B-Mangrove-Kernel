@@ -1,11 +1,12 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P462 WDT s2idle null-safe, live ramoops canonical ECC48, oops panic10, P460B frozen
+run-name: P461 sensors downstream 5.10 ADSP FastRPC, G ECC48 pstore probe, P462 frozen
 on:
   push:
     branches:
       - agent/p461-fastrpc-abi-audit-ecc48
       - agent/p461-real-adsprpc-dtbo-forensics
       - agent/p462-s2idle-wdt-pstore-live
+      - agent/p461-sensors-adsprpc-active
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -258,7 +259,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -277,9 +278,26 @@ jobs:
             cat phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
-            python3 scripts/461_graft_adsprpc_donor.py --root "$ROOT" \
-              --report phase447-inventory/P461-ADSPRPC-PORT-BLOCKERS.json
-            echo 'P461 donor is SOURCE-ONLY; no fake CONFIG_MSM_ADSPRPC or char nodes; blockers in report' >> "$GITHUB_STEP_SUMMARY"
+            # P461 sensors-only: build real Lineage 5.10 driver and compat
+            # against actual restored Mangrove tree; no fake RPC stubs.
+            python3 scripts/461_enable_sensors_fastrpc.py --root "$ROOT" \
+              --config "$PWD/workspace/gki-phase199-out/.config" \
+              --report phase447-inventory/P461-SENSORS-DOWNSTREAM-PORT.json
+            python3 scripts/461_enable_sensors_fastrpc.py --root "$ROOT" \
+              --config "$PWD/workspace/gki-phase199-out/.config" \
+              --report phase447-inventory/P461-SENSORS-DOWNSTREAM-PORT.json --check-only
+            python3 scripts/461_sensor_pstore_probe.py --root "$ROOT" \
+              --report phase447-inventory/P461-PSTORE-PLATFORM-GATE.json
+            python3 scripts/461_sensor_pstore_probe.py --root "$ROOT" --check-only
+            "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
+              --enable MSM_ADSPRPC --enable PSTORE_RAM --enable PSTORE \
+              --enable PSTORE_CONSOLE --enable PSTORE_PMSG --enable REED_SOLOMON
+            make -C "$ROOT" O="$PWD/workspace/gki-phase199-out" ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
+            grep -Fxq 'CONFIG_MSM_ADSPRPC=y' "$PWD/workspace/gki-phase199-out/.config"
+            grep -Fxq 'CONFIG_PSTORE_RAM=y' "$PWD/workspace/gki-phase199-out/.config"
+            grep -Fxq 'CONFIG_REED_SOLOMON=y' "$PWD/workspace/gki-phase199-out/.config"
+            echo 'P461 downstream FastRPC + real compat + pstore/ramoops compiled-in CONFIG GATE PASS' >> "$GITHUB_STEP_SUMMARY"
           fi
           python3 scripts/453_daily_usb_resume.py --root "$ROOT" --check-only
           grep -Fq "P460B_H0_GUARD_2S_WDT_10S_V1" "$ROOT/drivers/a52_447/a52_sm5714_fg_ro.c"
@@ -862,6 +880,10 @@ jobs:
           PY
             grep -aFq 'P462 WDT DIAG_SKIP no_bind_rc=-ENODEV' workspace/gki-phase199-out/arch/arm64/boot/Image
             echo 'P462 WDT linked PASS: no-bind diagnostic path and PM NULL guards' >> "$GITHUB_STEP_SUMMARY"
+            for marker in 'P461 FASTRPC PD_START cid=' 'P461 FASTRPC RPMSG UP cid=' 'P461 FASTRPC SMMU ATTACH session=' 'P461 FASTRPC ioctl=0x' 'P461 PSTORE RAMOOPS_PROBE'; do
+              grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P461 unlinked driver marker::$marker"; exit 1; }
+            done
+            echo 'P461 linked driver + original downstream RPC protocol, built-in pstore probe PASS' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
             A) ORIGINAL_BOOT="phase447b-variants/A-wave2-battery-only.boot.img" ;;
@@ -1089,13 +1111,20 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P462-WDT-S2IDLE-ECC48-${{ github.run_number }}
+          name: MANGROVE-P461-SENSORS-ADSPRPC-${{ github.run_number }}
           path: |
             phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img
             scripts/460b_apps_smmu_tg.py
             scripts/462_wdt_pm_safety.py
             scripts/462_pm_probe_bypass_audit.py
             scripts/462_live_ramoops_authoritative.py
+            phase447-inventory/P461-SENSORS-DOWNSTREAM-PORT.json
+            phase447-inventory/P461-PSTORE-PLATFORM-GATE.json
+            scripts/461_enable_sensors_fastrpc.py
+            scripts/461_sensor_pstore_probe.py
+            gki/common/drivers/char/adsprpc.c
+            gki/common/drivers/char/adsprpc_compat.c
+            gki/common/drivers/char/adsprpc_shared.h
             phase447-inventory/P462-WDT-PM-SAFETY.json
             phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.json
             phase447-inventory/P462-PM-PROBE-BYPASS-AUDIT.md
