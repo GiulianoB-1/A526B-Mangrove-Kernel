@@ -20,7 +20,7 @@ def replace_once(s,old,new,why):
 
 def func(s,name):
     # Function definitions, not prototypes: match '{' on declaration.
-    pat=r"(?m)^(?:static\s+)?(?:(?:inline|__always_inline|__maybe_unused|__init)\s+)*(?:int|void|long|bool|ssize_t|irqreturn_t)\s+(?:__\w+\s+)?"+re.escape(name)+r"\s*\([^;{}]*?\)\s*\{"
+    pat=r"(?m)^(?:static\s+)?(?:(?:inline|__always_inline|__maybe_unused|__init)\s+)*(?:unsigned\\s+int|int|void|long|bool|ssize_t|irqreturn_t)\s+(?:__\w+\s+)?"+re.escape(name)+r"\s*\([^;{}]*?\)\s*\{"
     m=re.search(pat,s,re.S)
     if m is None:raise RuntimeError(f"P461 function absent: {name}")
     depth=0;start=m.end()-1;i=start
@@ -427,6 +427,32 @@ unlock:
         return a52_fastrpc_unsupported("CDSP/modem RPMSG");
 """,
         "reject non-ADSP transport channels"))
+    # Donor dead-code cleanup: these helpers have NO call sites after
+    # excluding CDSP, ramdump, dynamic/static PD, SSR and PDR above.
+    # Delete their bodies rather than turning off -Wunused-function.
+    # If a future donor reintroduces a caller, fail the source gate.
+    orphaned=(
+        "fastrpc_alloc_cma_memory",
+        "sorted_lists_intersection",
+        "fastrpc_ramdump_collection",
+        "fastrpc_notify_drivers",
+        "fastrpc_notify_pdr_drivers",
+        "fastrpc_mmap_remove_pdr",
+        "fastrpc_print_debug_data",
+    )
+    s=replace_once(s,
+        "static int fastrpc_mmap_remove_pdr(struct fastrpc_file *fl);\n",
+        "",
+        "drop disabled PDR orphan prototype")
+    s=replace_once(s,
+        "static int hlosvmperm[1] = {PERM_READ | PERM_WRITE | PERM_EXEC};\n",
+        "",
+        "drop orphan VM permissions for unsupported remote heap")
+    for name in orphaned:
+        s=body_replace(s,name,lambda _:
+            "/* P461 "+name+" compiled out (unused excluded feature) */")
+        if re.search(r"\\b"+re.escape(name)+r"\\s*\\(",s):
+            raise RuntimeError("P461 excluded feature still calls "+name)
     # All initialization must be sensors-first, with no automatic PAS.
     s=s.replace('create_ramdump_device(', 'a52_fastrpc_unsupported("ramdump",')
     # Foreign API must never be called in generated driver:
