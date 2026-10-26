@@ -245,6 +245,151 @@ static int a52_fastrpc_unsupported(const char *feature)
         '\t\t\tpr_warn_once("P461 FASTRPC SSR remote heap dump disabled rc=-EOPNOTSUPP\\\\n");\n',
         f,flags=re.S))
 
+    # The PDR service locator is deliberately absent. Its status probe is
+    # skipped only for the ADSP sensors PD; the *real DSP RPC* below must
+    # still return success, or INIT fails with its actual errno.
+    s=body_replace(s,"fastrpc_check_pd_status",lambda _:'''static int fastrpc_check_pd_status(struct fastrpc_file *fl,
+        char *sloc_name)
+{
+    if (fl && fl->cid == ADSP_DOMAIN_ID && sloc_name &&
+        !strcmp(sloc_name, SENSORS_PDR_ADSP_SERVICE_LOCATION_CLIENT_NAME)) {
+        pr_info_once("P461 FASTRPC PDR STATUS bypassed for ADSP sensor RPC; real INIT RPC required\n");
+        return 0;
+    }
+    return a52_fastrpc_unsupported("PDR status");
+}''')
+    s=body_replace(s,"fastrpc_device_ioctl",lambda f:replace_once(
+        f,'''    if (fl->servloc_name) {''',
+        '''    if (fl->servloc_name && fl->cid != ADSP_DOMAIN_ID) {''',
+        "PDR disabled for sensor-only ioctls"))
+    s=body_replace(s,"fastrpc_init_create_dynamic_process",
+        lambda _:'''static int fastrpc_init_create_dynamic_process(
+        struct fastrpc_file *fl, struct fastrpc_ioctl_init_attrs *uproc)
+{
+    return a52_fastrpc_unsupported("dynamic-PD-CDSP");
+}''')
+    s=body_replace(s,"fastrpc_init_create_static_process",
+        lambda _:'''static int fastrpc_init_create_static_process(
+        struct fastrpc_file *fl, struct fastrpc_ioctl_init *init)
+{
+    return a52_fastrpc_unsupported("audio-PD-remote-heap");
+}''')
+    s=body_replace(s,"fastrpc_get_cdsp_status",
+        lambda _:'''static void fastrpc_get_cdsp_status(struct fastrpc_apps *me)
+{
+    me->fastrpc_cdsp_status = 0;
+    pr_info_once("P461 FASTRPC CDSP unsupported rc=-EOPNOTSUPP\n");
+}''')
+    # No PDR/SSR registration means no callback. RPMSG remove is the
+    # only signal that the ADSP peer is gone. Do not build notifier code
+    # referencing unavailable downstream QCOM notifier APIs.
+    s=body_replace(s,"fastrpc_restart_notifier_cb",
+        lambda _:"/* P461 no external SSR notifier; RPMSG removal owns shutdown */")
+    s=body_replace(s,"fastrpc_pdr_cb",
+        lambda _:"/* P461 PDR callback compiled out: not registered */")
+    s=body_replace(s,"fastrpc_setup_service_locator",
+        lambda _:"/* P461 PDR service locator intentionally not registered */")
+    # Remove proprietary mapping flags everywhere; no flag is emulated as
+    # a success and no delayed-unmap lifecycle is retained.
+    for obsolete in ("DMA_ATTR_EXEC_MAPPING","DMA_ATTR_DELAYED_UNMAP",
+                     "DMA_ATTR_SYS_CACHE_ONLY","DMA_ATTR_SKIP_ZEROING"):
+        s=s.replace(obsolete,"0 /* P461 no proprietary DMA attr */")
+    if any(flag in s for flag in ("DMA_ATTR_EXEC_MAPPING","DMA_ATTR_DELAYED_UNMAP",
+                                 "DMA_ATTR_SYS_CACHE_ONLY","DMA_ATTR_SKIP_ZEROING")):
+        raise RuntimeError("P461 proprietary DMA attributes remain")
+    s=body_replace(s,"fastrpc_mmap_remove_ssr",
+        lambda f:replace_once(f,"int err = 0, ret = 0;","int err = 0;",
+                              "SSR dump unused ret"))
+    # No early/automatic context-bank IOMMU attachments: create ADSP
+    # CB platform child devices only upon the first GETINFO session and
+    # only after RPMSG is UP. The parent is probed without CB population.
+    helper=r'''
+static const struct of_device_id fastrpc_match_table[];
+static DEFINE_MUTEX(a52_fastrpc_cb_lock);
+static struct device *a52_fastrpc_compute_dev;
+static bool a52_fastrpc_cb_populated;
+
+static int a52_fastrpc_populate_on_first_session(void)
+{
+    int ret = 0;
+
+    mutex_lock(&a52_fastrpc_cb_lock);
+    if (!a52_fastrpc_compute_dev ||
+        !READ_ONCE(gcinfo[ADSP_DOMAIN_ID].rpdev)) {
+        ret = -ENOTCONN;
+        goto unlock;
+    }
+    if (a52_fastrpc_cb_populated)
+        goto unlock;
+    ret = of_platform_populate(a52_fastrpc_compute_dev->of_node,
+                               fastrpc_match_table, NULL,
+                               a52_fastrpc_compute_dev);
+    if (!ret) {
+        a52_fastrpc_cb_populated = true;
+        pr_info("P461 FASTRPC SMMU CB_CREATE lazy_first_session=1 count=%llu\n",
+                gcinfo[ADSP_DOMAIN_ID].sesscount);
+    }
+unlock:
+    mutex_unlock(&a52_fastrpc_cb_lock);
+    return ret;
+}
+
+'''
+    sig='static int fastrpc_get_info(struct fastrpc_file *fl, uint32_t *info)'
+    s=replace_once(s,sig,helper+sig,"lazy CB helper placement")
+    s=body_replace(s,"fastrpc_get_info",
+        lambda f:replace_once(f,
+            '\tfastrpc_get_process_gids(&fl->gidlist);',
+            '''    if (cid != ADSP_DOMAIN_ID)
+        return a52_fastrpc_unsupported("non-ADSP-domain");
+    err = a52_fastrpc_populate_on_first_session();
+    if (err)
+        goto bail;
+\tfastrpc_get_process_gids(&fl->gidlist);''',
+            "first-session attach setup"))
+    # Parent platform probe must not instantiate CB children at boot.
+    s=body_replace(s,"fastrpc_probe",
+        lambda f:replace_once(f,
+            '''\terr = of_platform_populate(pdev->dev.of_node,
+\t\t\t\t\t  fastrpc_match_table,
+\t\t\t\t\t  NULL, &pdev->dev);
+\tif (err)
+\t\tgoto bail;''',
+            '''    if (of_device_is_compatible(dev->of_node,
+               "qcom,msm-fastrpc-compute")) {
+        a52_fastrpc_compute_dev = dev;
+        pr_info("P461 FASTRPC PROBE parent=%s ADSP CB attach deferred\n",
+                dev_name(dev));
+    }''',
+            "defer SMMU child population"))
+    # Fast bounded no-peer open, BEFORE any file state is allocated.
+    s=body_replace(s,"fastrpc_device_open",lambda f:replace_once(
+        f,'\tVERIFY(err, ((dev_minor == MINOR_NUM_DEV) ||',
+        '''    if (!READ_ONCE(gcinfo[ADSP_DOMAIN_ID].rpdev)) {
+        pr_warn_ratelimited("P461 FASTRPC OPEN rc=-ENOTCONN ADSP_DOWN\n");
+        return -ENOTCONN;
+    }
+\tVERIFY(err, ((dev_minor == MINOR_NUM_DEV) ||''',
+        "ADSP-off open refusal"))
+    # Wait for actual remote response with a bounded timeout, even after
+    # an unexpected ADSP crash. No infinite kernel-side wait.
+    s=body_replace(s,"fastrpc_wait_for_response",
+        lambda _:'''static inline int fastrpc_wait_for_response(
+        struct smq_invoke_ctx *ctx, uint32_t kernel)
+{
+    long ret;
+
+    if (kernel)
+        ret = wait_for_completion_timeout(&ctx->work, msecs_to_jiffies(5000));
+    else
+        ret = wait_for_completion_interruptible_timeout(
+            &ctx->work, msecs_to_jiffies(5000));
+    if (ret == 0) {
+        pr_warn_ratelimited("P461 FASTRPC RPC wait timeout 5000ms rc=-ETIMEDOUT\n");
+        return -ETIMEDOUT;
+    }
+    return ret < 0 ? (int)ret : 0;
+}''')
     # All initialization must be sensors-first, with no automatic PAS.
     s=s.replace('create_ramdump_device(', 'a52_fastrpc_unsupported("ramdump",')
     # Foreign API must never be called in generated driver:
