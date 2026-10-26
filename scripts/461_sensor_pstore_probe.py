@@ -26,21 +26,55 @@ def run(root,check=False):
         marker="P461 PSTORE OF_RAMOOPS"
         if marker in f:
             raise RuntimeError("P461 duplicate fallback instrumentation")
+        # OF_POPULATED is an allocation flag, NOT a registered pdev.
+        # If already set, first search for the existing platform device.
+        # Only clear a genuinely stale flag for this exact reserved-memory
+        # consumer, and only after verifying no registered pdev by node.
+        # Never create a second DT node/resource or clear an active device.
         f+="""
 
 static int __init a52_p461_ramoops_populate(void)
 {
     struct device_node *np;
     struct platform_device *pdev;
+    bool was_populated;
     int found = 0;
 
     for_each_compatible_node(np, NULL, "ramoops") {
         if (!of_device_is_available(np))
             continue;
+        if (strcmp(np->full_name,
+                   "/reserved-memory/ramoops@B1B00000")) {
+            pr_err("P461 PSTORE unexpected RAMOOPS node=%pOF; refuse second device\\n",
+                   np);
+            continue;
+        }
         found++;
+        was_populated = of_node_check_flag(np, OF_POPULATED);
+        pdev = of_find_device_by_node(np);
+        if (pdev) {
+            pr_info("P461 PSTORE EXISTING node=%pOF pdev=%s bound_driver=%s populated=%d\\n",
+                    np, dev_name(&pdev->dev),
+                    pdev->dev.driver ? pdev->dev.driver->name : "<none>",
+                    was_populated);
+            of_dev_put(pdev);
+            continue;
+        }
+        if (was_populated) {
+            pr_warn("P461 PSTORE STALE_OF_POPULATED node=%pOF no_platform_device=1 reset_to_retry\\n",
+                    np);
+            of_node_clear_flag(np, OF_POPULATED);
+        }
         pdev = of_platform_device_create(np, NULL, NULL);
-        pr_info("P461 PSTORE OF_RAMOOPS node=%pOF pdev=%p created_or_already_populated=%d\\n",
-                np, pdev, of_node_check_flag(np, OF_POPULATED));
+        if (!pdev) {
+            pr_err("P461 PSTORE CREATE_FAIL node=%pOF was_populated=%d now_populated=%d\\n",
+                   np, was_populated,
+                   of_node_check_flag(np, OF_POPULATED));
+        } else {
+            pr_info("P461 PSTORE CREATE_OK node=%pOF pdev=%s was_populated=%d bound_driver=%s\\n",
+                    np, dev_name(&pdev->dev), was_populated,
+                    pdev->dev.driver ? pdev->dev.driver->name : "<unbound>");
+        }
     }
     if (found != 1)
         pr_err("P461 PSTORE OF_RAMOOPS count=%d expected=1\\n", found);
@@ -62,7 +96,9 @@ arch_initcall_sync(a52_p461_ramoops_populate);
             '\terr = pstore_register(&cxt->pstore);',
             "pstore register call")
         p.write_text(f);q.write_text(g)
-    for required in (TAG,"of_platform_device_create(np, NULL, NULL)"):
+    for required in (TAG,"of_platform_device_create(np, NULL, NULL)",
+                     "of_find_device_by_node(np)","STALE_OF_POPULATED",
+                     "of_node_clear_flag(np, OF_POPULATED)"):
         if required not in p.read_text():raise RuntimeError("P461 missing OF audit "+required)
     for required in ("P461 PSTORE RAMOOPS_PROBE","P461 PSTORE RAMOOPS_REGISTER"):
         if required not in q.read_text():raise RuntimeError("P461 missing pstore probe marker "+required)
