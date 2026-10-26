@@ -144,13 +144,18 @@ static void a52g_poll(struct work_struct *work)
     }
 '''
     s=one(s,anchor,reg+anchor,"PM notifier before guard initial scheduling")
-    s=one(s,"cancel_delayed_work_sync(&fg->a52g_guard_work);",
+    # The PM callback also cancels work. Only modify the FG devres
+    # teardown, not the callback; otherwise source replacement is ambiguous.
+    ua,ub=func(s,"a52d_fg_unregister")
+    unregister=s[ua:ub]
+    unregister=one(unregister,"cancel_delayed_work_sync(&fg->a52g_guard_work);",
           '''if (fg->a52g_pm_registered) {
         unregister_pm_notifier(&fg->a52g_pm_nb);
         fg->a52g_pm_registered = false;
     }
     cancel_delayed_work_sync(&fg->a52g_guard_work);''',
           "ordered unregister before guard teardown")
+    s=s[:ua]+unregister+s[ub:]
     return s
 
 def validate(s):
