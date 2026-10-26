@@ -390,6 +390,28 @@ unlock:
     }
     return ret < 0 ? (int)ret : 0;
 }''')
+    # Proprietary audio/CDSP RAMDUMP startup was removed. Drop its
+    # now-unused stack locals rather than weakening Clang -Werror.
+    s=body_replace(s,"fastrpc_device_init",lambda f:replace_once(
+        f,
+        "\tuintptr_t attr = 0;\n\tdma_addr_t region_phys = 0;\n\tvoid *region_vaddr = NULL;\n\tstruct fastrpc_buf *buf = NULL;\n",
+        "",
+        "drop unused CDSP RAMDUMP initialization locals"))
+    s=body_replace(s,"fastrpc_device_exit",lambda f:replace_once(
+        f,"\tint i;\n","","drop unused SSR teardown loop index"))
+    s=body_replace(s,"fastrpc_probe",lambda f:replace_once(
+        f,"\tint ret = 0;\n","","drop unused audio remoteheap ret variable"))
+
+    # ADSP is the *only* supported peer. Registered RPMSG devices for CDSP
+    # or modem are explicitly rejected rather than being treated as ready.
+    s=body_replace(s,"fastrpc_rpmsg_probe",lambda f:replace_once(
+        f,
+        "\tcid = get_cid_from_rpdev(rpdev);",
+        """    cid = get_cid_from_rpdev(rpdev);
+    if (cid != ADSP_DOMAIN_ID)
+        return a52_fastrpc_unsupported("CDSP/modem RPMSG");
+""",
+        "reject non-ADSP transport channels"))
     # All initialization must be sensors-first, with no automatic PAS.
     s=s.replace('create_ramdump_device(', 'a52_fastrpc_unsupported("ramdump",')
     # Foreign API must never be called in generated driver:
