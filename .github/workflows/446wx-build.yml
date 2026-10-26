@@ -259,7 +259,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -992,6 +992,19 @@ jobs:
               --dtb-out phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
               --report phase447b-variants/P461-ADSP-ONLY-PREBUILD-MANIFEST.json \
               | tee phase447b-variants/P461-ADSP-ONLY-PREBUILD-AUDIT.txt
+            # Unlike P461 audit-only runs: this is the ACTUAL uploaded G
+            # boot.img, with ADSP-only CB10/11/12 and 48-byte ECC. Keep
+            # P462 watchdog and all kernel/SCM/PAS image contents intact.
+            python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
+              --dtb phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
+              --output phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img \
+              --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
+            FINAL_G="phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img"
+            python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
+              --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
+              --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
+              | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
+            echo 'P461 ACTIVE SENSOR BOOT: only ADSP CB10/11/12 + ECC48; hardware still unverified' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload Phase446i GKI failure diagnostics
         if: failure()
@@ -1113,7 +1126,9 @@ jobs:
         with:
           name: MANGROVE-P461-SENSORS-ADSPRPC-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P462-WDT-RA-MOOPS.boot.img
+            phase447b-variants/MANGROVE-P461-SENSORS-ADSPRPC.boot.img
+            phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
+            scripts/461_pack_adsp_sensor_boot.py
             scripts/460b_apps_smmu_tg.py
             scripts/462_wdt_pm_safety.py
             scripts/462_pm_probe_bypass_audit.py
