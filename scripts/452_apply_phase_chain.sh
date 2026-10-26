@@ -309,6 +309,11 @@ if [ "${A52_VARIANT_ID}" = G ]; then
     --enable REMOTEPROC --enable RPMSG_QCOM_SMD \
     --enable QCOM_Q6V5_PAS --enable QCOM_SCM \
     --disable QCOM_SCM_DOWNLOAD_MODE_DEFAULT
+  # P461: /reserved-memory/ramoops is already present with ECC48 in
+  # P462 live FDT. 5.10 needs the actual platform driver compiled in.
+  "$ROOT/scripts/config" --file "$BUILD/.config" \
+    --enable PSTORE --enable PSTORE_RAM --enable PSTORE_CONSOLE \
+    --enable PSTORE_PMSG --enable REED_SOLOMON
 fi
 make -C "$ROOT" O="$BUILD" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
 grep -Fxq 'CONFIG_LOCALVERSION="-Mangrove"' "$BUILD/.config"
