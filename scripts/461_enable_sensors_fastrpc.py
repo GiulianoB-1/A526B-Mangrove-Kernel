@@ -416,6 +416,27 @@ def main():
     driver=transform((donor/"adsprpc.c").read_text())
     compat=(donor/"adsprpc_compat.c").read_text().replace(
         "#include <linux/msm_ion.h>\n","")
+    if compat.count("long compat_fastrpc_device_ioctl(")!=1:
+        raise RuntimeError("P461 compat original ioctl dispatch anchor drift")
+    compat=compat.replace("long compat_fastrpc_device_ioctl(",
+                          "static long a52_fastrpc_compat_ioctl_inner(",1)
+    compat+='''
+long compat_fastrpc_device_ioctl(struct file *filp, unsigned int cmd,
+                                unsigned long arg)
+{
+    long rc;
+
+    if (_IOC_TYPE(cmd) == 'R' && _IOC_NR(cmd) == 9) {
+        pr_warn_once("P461 FASTRPC GETPERF compat cmd=0x%x errno=-ENOTTY\\n", cmd);
+        return -ENOTTY;
+    }
+    rc = a52_fastrpc_compat_ioctl_inner(filp, cmd, arg);
+    if (rc)
+        pr_warn_ratelimited("P461 FASTRPC compat ioctl=0x%x errno=%ld\\n",
+                            cmd, rc);
+    return rc;
+}
+'''
     mk=target/"Makefile";kc=target/"Kconfig"
     m=mk.read_text();k=kc.read_text()
     if "CONFIG_MSM_ADSPRPC" not in m:
