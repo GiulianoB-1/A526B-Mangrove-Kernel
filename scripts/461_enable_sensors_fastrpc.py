@@ -259,8 +259,8 @@ static int a52_fastrpc_unsupported(const char *feature)
     return a52_fastrpc_unsupported("PDR status");
 }''')
     s=body_replace(s,"fastrpc_device_ioctl",lambda f:replace_once(
-        f,'''    if (fl->servloc_name) {''',
-        '''    if (fl->servloc_name && fl->cid != ADSP_DOMAIN_ID) {''',
+        f,"\tif (fl->servloc_name) {",
+        "\tif (fl->servloc_name && fl->cid != ADSP_DOMAIN_ID) {",
         "PDR disabled for sensor-only ioctls"))
     s=body_replace(s,"fastrpc_init_create_dynamic_process",
         lambda _:'''static int fastrpc_init_create_dynamic_process(
