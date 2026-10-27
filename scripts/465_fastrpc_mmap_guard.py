@@ -144,15 +144,15 @@ static int a52_p465_validate_map(struct fastrpc_file *fl,
          "ud->m.length", "MEM_MAP"),
     ):
         pre = (
-            f"    if (!fl || !ud) {{\n"
-            f"        pr_warn_ratelimited(\"P465 FASTRPC {op} null_ioctl errno=-EINVAL\\n\");\n"
-            f"        return -EINVAL;\n"
-            f"    }}\n"
-            f"    pr_info_ratelimited(\"P465 FASTRPC {op} fd=%d flags=%#x size=%zu cid=%d\\n\",\n"
-            f"                        {fd}, {field}, (size_t){size}, fl->cid);\n"
-            f"    err = a52_p465_validate_map(fl, {field}, \"{op}\");\n"
-            f"    if (err)\n"
-            f"        return err;\n"
+            f"\tif (!fl || !ud) {{\n"
+            f"\t\tpr_warn_ratelimited(\"P465 FASTRPC {op} null_ioctl errno=-EINVAL\\n\");\n"
+            f"\t\treturn -EINVAL;\n"
+            f"\t}}\n"
+            f"\tpr_info_ratelimited(\"P465 FASTRPC {op} fd=%d flags=%#x size=%zu cid=%d\\n\",\n"
+            f"\t\t\t\t{fd}, {field}, (size_t){size}, fl->cid);\n"
+            f"\terr = a52_p465_validate_map(fl, {field}, \"{op}\");\n"
+            f"\tif (err)\n"
+            f"\t\treturn err;\n"
         )
         s = edit_function(s, name, "\tmutex_lock(&fl->internal_map_mutex);",
                           pre + "\tmutex_lock(&fl->internal_map_mutex);",
@@ -168,10 +168,10 @@ static int a52_p465_validate_map(struct fastrpc_file *fl,
     # Reject malformed unmap ioctls before dereferencing fl->dsp_proc_init.
     s = edit_function(s, "fastrpc_internal_munmap",
                       "\tVERIFY(err, fl->dsp_proc_init == 1);",
-                      "    if (!fl || !ud || !fl->apps) {\n"
-                      "        pr_warn_ratelimited(\"P465 FASTRPC MUNMAP invalid_ioctl errno=-EINVAL\\n\");\n"
-                      "        return -EINVAL;\n"
-                      "    }\n"
+                      "\tif (!fl || !ud || !fl->apps) {\n"
+                      "\t\tpr_warn_ratelimited(\"P465 FASTRPC MUNMAP invalid_ioctl errno=-EINVAL\\n\");\n"
+                      "\t\treturn -EINVAL;\n"
+                      "\t}\n"
                       "\tVERIFY(err, fl->dsp_proc_init == 1);",
                       "MUNMAP pointer guard")
     s = edit_function(s, "fastrpc_internal_munmap_fd",
@@ -180,10 +180,10 @@ static int a52_p465_validate_map(struct fastrpc_file *fl,
                       "MUNMAP_FD pointer guard")
     s = edit_function(s, "fastrpc_internal_mem_unmap",
                       "\tmutex_lock(&fl->internal_map_mutex);",
-                      "    if (!fl || !ud || !fl->apps) {\n"
-                      "        pr_warn_ratelimited(\"P465 FASTRPC MEM_UNMAP invalid_ioctl errno=-EINVAL\\n\");\n"
-                      "        return -EINVAL;\n"
-                      "    }\n"
+                      "\tif (!fl || !ud || !fl->apps) {\n"
+                      "\t\tpr_warn_ratelimited(\"P465 FASTRPC MEM_UNMAP invalid_ioctl errno=-EINVAL\\n\");\n"
+                      "\t\treturn -EINVAL;\n"
+                      "\t}\n"
                       "\tmutex_lock(&fl->internal_map_mutex);",
                       "MEM_UNMAP pointer guard")
 
