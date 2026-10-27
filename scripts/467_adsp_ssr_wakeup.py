@@ -154,11 +154,11 @@ def selftest():
     rproc->auto_boot = desc->auto_boot;
     /* A52_PHASE451_SM6350_ADSP_PAS_V1 */
     dev_info(&pdev->dev,"P451 ADSP PROBE manual_start=1");
-    ret = rproc_add(rproc);
-    if (ret)
-        goto destroy_minidump_dev;
+	ret = rproc_add(rproc);
+	if (ret)
+		goto destroy_minidump_dev;
 
-    return 0;
+	return 0;
 destroy_minidump_dev:
     return ret;
 }
