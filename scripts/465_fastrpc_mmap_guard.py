@@ -125,10 +125,17 @@ static int a52_p465_validate_map(struct fastrpc_file *fl,
         "\t\t\tgoto bail;\n"
         "\t\t}\n"
     )
+    # Donor has TWO nents checks: NOMAP and !sess->smmu.enabled.
+    # Match the NOMAP diagnostic, not the shared VERIFY expression.
+    nomap_nents = (
+        "\t\tVERIFY(err, map->table->nents == 1);\n"
+        "\t\tif (err) {\n"
+        "\t\t\tADSPRPC_ERR(\n"
+        "\t\t\t\t\"multiple scatter-gather entries (%u) present for NOMAP fd %d\\n\","
+    )
     s = edit_function(s, "fastrpc_mmap_create",
-                      "\t\tVERIFY(err, map->table->nents == 1);",
-                      null_table_guard +
-                      "\t\tVERIFY(err, map->table->nents == 1);",
+                      nomap_nents,
+                      null_table_guard + nomap_nents,
                       "NOMAP NULL table before nents")
     s = edit_function(s, "fastrpc_mmap_create",
                       "\t\tif (!sess->smmu.enabled) {",
