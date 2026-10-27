@@ -127,7 +127,7 @@ def check_rpc(s):
     a,b=function(s,"fastrpc_init_create_static_process")
     f=s[a:b]
     if ("pr_warn_once(\"P467 FASTRPC AUDIOPD_UNSUPPORTED" not in f or
-        "return -EOPNOTSUPP;" not in f:
+        "return -EOPNOTSUPP;" not in f):
         raise RuntimeError("P467 cheap audioPD rejection missing")
     for invariant in ("P461 FASTRPC PD_START cid=",
                       "P466 FASTRPC DMA_MAP fd=",
