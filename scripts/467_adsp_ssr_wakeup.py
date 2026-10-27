@@ -36,6 +36,10 @@ def unique(s,old,new,what):
 
 def patch_pas(s):
     if TAG in s:raise RuntimeError("P467 PAS double applied")
+    if "#include <linux/pm_wakeup.h>" not in s:
+        s=unique(s, "#include <linux/platform_device.h>",
+                 "#include <linux/platform_device.h>\n#include <linux/pm_wakeup.h>",
+                 "explicit parent wakeup API header")
     if ("A52_PHASE451_SM6350_ADSP_PAS_V1" not in s or
         "P451 ADSP PROBE manual_start=1" not in s or
         "rproc->auto_boot = desc->auto_boot;" not in s):
@@ -147,7 +151,8 @@ def selftest():
     check_rpc(patch_rpc(generated))
     # PAS is restored from an exact source tarball later in CI. Exercise
     # the rproc_add/cleanup anchor and require matching real-source gate.
-    fixture='''static int adsp_probe(struct platform_device *pdev)
+    fixture='''#include <linux/platform_device.h>
+static int adsp_probe(struct platform_device *pdev)
 {
     struct rproc *rproc;
     int ret;
