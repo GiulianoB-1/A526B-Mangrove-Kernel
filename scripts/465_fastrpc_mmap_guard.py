@@ -253,7 +253,7 @@ def check(s):
         raise RuntimeError("P466 legacy 5s invoke abort remains")
     if s.count("P466 FASTRPC DMA_MAPPED path=") != 2:
         raise RuntimeError("P466 missing one successful mapping SID/IOVA log")
-        if "dev_name(me->dev)" in s:
+    if "dev_name(me->dev)" in s:
         raise RuntimeError("P465 NULL diagnostics still possible")
     if s.count("a52_p465_validate_map(fl,") != 3:
         raise RuntimeError("P465 changed map validator invocation count")
