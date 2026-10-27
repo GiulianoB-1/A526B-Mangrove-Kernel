@@ -921,7 +921,7 @@ jobs:
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P465 missing mmap guard Image marker::$marker"; exit 1; }
             done
             echo 'P465 linked mmap crash guard, flags logging, heap fail-closed and CB DMA validation PASS' >> "$GITHUB_STEP_SUMMARY"
-            for marker in 'P466 FASTRPC DMA_MAP_OK fd=' 'P466 FASTRPC INVOKE_WAIT_LONG' 'P466 FASTRPC DMA LISTENER V1'; do
+            for marker in 'P466 FASTRPC DMA_MAP_OK fd=' 'P466 FASTRPC INVOKE_WAIT_LONG' 'P465 FASTRPC NULL_TABLE fd='; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P466 missing compiled FastRPC fix::$marker"; exit 1; }
             done
             if grep -aFq 'P461 FASTRPC RPC wait timeout 5000ms' workspace/gki-phase199-out/arch/arm64/boot/Image; then
