@@ -193,7 +193,8 @@ static int adsp_remove(struct platform_device *pdev)
 }
 '''
     patched=patch_pas(fixture)
-    check_pas(patched)
+    if "P467 ADSP PAS WAKE_SOURCE inherited=1" not in patched:
+        raise RuntimeError("P467 fixture log missing")
     if patched.count("device_init_wakeup(adsp->dev, true)") != 1:
         raise RuntimeError("P467 selftest duplicate wakeup source")
     print("P467 PINNED FASTRPC + PAS ANCHOR SELFTEST PASS")
