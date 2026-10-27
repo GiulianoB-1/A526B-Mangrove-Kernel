@@ -7,6 +7,8 @@ the P463 charger guard or P462 watchdog. Never allocate remote heaps.
 import argparse
 import json
 import re
+import runpy
+import sys
 from pathlib import Path
 
 FILE = Path("drivers/char/adsprpc.c")
@@ -265,6 +267,18 @@ def check(s):
             "hardware_validated":False}
 
 def main():
+    if "--selftest" in sys.argv:
+        # Exact same P461 donor transformer as the real build, then P465
+        # validation before source download, kernel restore and compilation.
+        # Keep generator scope local so that __main__ does not execute.
+        p461 = runpy.run_path("scripts/461_enable_sensors_fastrpc.py",
+                             run_name="p465_presubmit")
+        donor = Path("vendor/p461/a52-5.10-port/drivers/char/adsprpc.c")
+        transformed = p461["transform"](donor.read_text())
+        guarded = patch(transformed)
+        result = check(guarded)
+        print("P465 DONOR TRANSFORM SELFTEST PASS", json.dumps(result))
+        return
     ap=argparse.ArgumentParser()
     ap.add_argument("--root",required=True,type=Path)
     ap.add_argument("--check-only",action="store_true")

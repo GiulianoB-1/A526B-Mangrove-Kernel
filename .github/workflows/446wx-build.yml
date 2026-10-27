@@ -90,6 +90,7 @@ jobs:
           python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
+          python3 scripts/465_fastrpc_mmap_guard.py --selftest
           python3 scripts/446_apply_heartbeat_cb2.py --help >/dev/null
           python3 scripts/446b_apply_heartbeat_fixes.py --help >/dev/null
           python3 scripts/446c_apply_takeover_window.py --help >/dev/null
