@@ -188,23 +188,23 @@ static int a52_fastrpc_hyp_assign_blocked(phys_addr_t addr, u64 size,
     s=replace_once(s,
         '\t\tmap->phys = sg_dma_address(map->table->sgl);\n'
         '\t\tmap->size = len;',
-        r'''        map->phys = sg_dma_address(map->table->sgl);
-        pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=NOMAP fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
+        r'''		map->phys = sg_dma_address(map->table->sgl);
+		pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=NOMAP fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
              fd, mflags, fl->sctx->smmu.sid,
              (unsigned long long)map->phys, map->table->nents, len,
              dev_name(fl->sctx->smmu.dev));
-        map->size = len;''',
+		map->size = len;''',
         'P466 NOMAP IOVA SID log')
     s=replace_once(s,
         '\t\tmap->phys = sg_dma_address(map->table->sgl);\n'
         '\n\t\tif (sess->smmu.cb) {',
-        r'''        map->phys = sg_dma_address(map->table->sgl);
-        pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=regular fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
+        r'''		map->phys = sg_dma_address(map->table->sgl);
+		pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=regular fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
              fd, mflags, sess->smmu.sid,
              (unsigned long long)map->phys, map->table->nents, len,
              dev_name(sess->smmu.dev));
 
-        if (sess->smmu.cb) {''',
+		if (sess->smmu.cb) {''',
         'P466 regular IOVA SID log')
 
     # Unknown secure/import FD is mapped only to nonsecure CB device;
