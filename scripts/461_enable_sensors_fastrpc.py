@@ -161,6 +161,52 @@ static int a52_fastrpc_hyp_assign_blocked(phys_addr_t addr, u64 size,
     s=s.replace('map->attach->dma_map_attrs', '0 /* P461 plain DMA-BUF */')
     if 'dma_map_attrs' in s:
         raise RuntimeError("P461 downstream dma-map-attrs leaked")
+    # P466 ROOT CAUSE: removing a one-line DMA_ATTR_SKIP_CPU_SYNC
+    # statement left its if (!sess->smmu.coherent) in place. That
+    # accidentally gated dma_buf_map_attachment() on !coherent, so
+    # coherent CB sessions returned map->table=NULL for flags 0x0.
+    # Remove ONLY the orphan condition, keep the map unconditional.
+    s, n = re.subn(
+        r'(?m)^\t\tif \(!sess->smmu\.coherent\)\n'
+        r'(?:[ \t]*\n)*(?=\t\tVERIFY\(err, !IS_ERR_OR_NULL\(map->table =)',
+        '\t\t/* P466 ADSP DMA-BUF map unconditionally after CB attach. */\n',
+        s)
+    if n != 1:
+        raise RuntimeError("P466 orphan coherent conditional count="+str(n))
+    # Keep the actual CB SID supplied by OF, rather than guessing from
+    # the low CB nibble or the compute slot numbering.
+    s=replace_once(s, '\tint cb;\n\tint enabled;',
+                   '\tint cb;\n\tu32 sid;\n\tint enabled;',
+                   'P466 sid field')
+    s=replace_once(s,
+        '\tsess->smmu.cb = iommuspec.args[0] & 0xf;',
+        '\tsess->smmu.cb = iommuspec.args[0] & 0xf;\n'
+        '\tsess->smmu.sid = iommuspec.args[0];',
+        'P466 record real ADSP CB SID')
+    # Trace successful IOVA before vendor upper-bit CB tagging. Do not
+    # modify map->phys or the existing shared-buffer remote ABI.
+    s=replace_once(s,
+        '\t\tmap->phys = sg_dma_address(map->table->sgl);\n'
+        '\t\tmap->size = len;',
+        r'''        map->phys = sg_dma_address(map->table->sgl);
+        pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=NOMAP fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
+             fd, mflags, fl->sctx->smmu.sid,
+             (unsigned long long)map->phys, map->table->nents, len,
+             dev_name(fl->sctx->smmu.dev));
+        map->size = len;''',
+        'P466 NOMAP IOVA SID log')
+    s=replace_once(s,
+        '\t\tmap->phys = sg_dma_address(map->table->sgl);\n'
+        '\n\t\tif (sess->smmu.cb) {',
+        r'''        map->phys = sg_dma_address(map->table->sgl);
+        pr_info_ratelimited("P466 FASTRPC DMA_MAPPED path=regular fd=%d flags=%#x sid=0x%04x iova=0x%llx nents=%u len=%zu cb=%s\n",
+             fd, mflags, sess->smmu.sid,
+             (unsigned long long)map->phys, map->table->nents, len,
+             dev_name(sess->smmu.dev));
+
+        if (sess->smmu.cb) {''',
+        'P466 regular IOVA SID log')
+
     # Unknown secure/import FD is mapped only to nonsecure CB device;
     # no software decision to create/enter secure SMMU context.
 
@@ -386,24 +432,28 @@ unlock:
     }
 \tVERIFY(err, ((dev_minor == MINOR_NUM_DEV) ||''',
         "ADSP-off open refusal"))
-    # Wait for actual remote response with a bounded timeout, even after
-    # an unexpected ADSP crash. No infinite kernel-side wait.
+    # P466: restore pinned donor completion semantics. adsprpcd and
+    # sscrpcd's adsp_default_listener are REVERSE-RPC listeners and may
+    # legitimately wait indefinitely for the next DSP work request.
+    # Keep kernel completions uninterruptible, userspace interruptible;
+    # NEVER synthesize -ETIMEDOUT from idle time. A long wait is logged
+    # after completion/interruption, without changing its return value.
     s=body_replace(s,"fastrpc_wait_for_response",
-        lambda _:'''static inline int fastrpc_wait_for_response(
+        lambda _:r'''static inline int fastrpc_wait_for_response(
         struct smq_invoke_ctx *ctx, uint32_t kernel)
 {
-    long ret;
+    unsigned long start = jiffies;
+    int interrupted = 0;
 
     if (kernel)
-        ret = wait_for_completion_timeout(&ctx->work, msecs_to_jiffies(5000));
+        wait_for_completion(&ctx->work);
     else
-        ret = wait_for_completion_interruptible_timeout(
-            &ctx->work, msecs_to_jiffies(5000));
-    if (ret == 0) {
-        pr_warn_ratelimited("P461 FASTRPC RPC wait timeout 5000ms rc=-ETIMEDOUT\\n");
-        return -ETIMEDOUT;
-    }
-    return ret < 0 ? (int)ret : 0;
+        interrupted = wait_for_completion_interruptible(&ctx->work);
+
+    if (time_after(jiffies, start + msecs_to_jiffies(5000)))
+        pr_info_ratelimited("P466 FASTRPC INVOKE_LONG_WAIT elapsed_ms=%u interrupted=%d kernel=%u no_timeout=1\n",
+            jiffies_to_msecs(jiffies - start), interrupted, kernel);
+    return interrupted;
 }''')
     # Proprietary audio/CDSP RAMDUMP startup was removed. Drop its
     # now-unused stack locals rather than weakening Clang -Werror.

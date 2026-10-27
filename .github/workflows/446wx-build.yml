@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P465 adsprpc mmap NULL/heap/SG guards + P463 suspend-safe H0, P460B frozen
+run-name: P466 unconditional ADSP CB DMA-BUF maps + unbounded reverse-RPC, P463 frozen
 on:
   push:
     branches:
@@ -9,6 +9,7 @@ on:
       - agent/p461-sensors-adsprpc-active
       - agent/p464-fastrpc-p463-guard-combined
       - agent/p465-fastrpc-mmap-guard
+      - agent/p466-fastrpc-dmabuf-listener
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -913,6 +914,14 @@ jobs:
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P465 missing mmap guard Image marker::$marker"; exit 1; }
             done
             echo 'P465 linked mmap crash guard, flags logging, heap fail-closed and CB DMA validation PASS' >> "$GITHUB_STEP_SUMMARY"
+            for marker in 'P466 FASTRPC DMA_MAPPED path=regular' 'P466 FASTRPC DMA_MAPPED path=NOMAP' 'P466 FASTRPC INVOKE_LONG_WAIT'; do
+              grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P466 DMA-BUF or listener missing::$marker"; exit 1; }
+            done
+            if grep -aFq 'P461 FASTRPC RPC wait timeout 5000ms' workspace/gki-phase199-out/arch/arm64/boot/Image; then
+              echo '::error title=P466 stale 5s invoke completion timeout remains::'
+              exit 1
+            fi
+            echo 'P466 linked unconditional CB dma_buf_map_attachment, real SID/IOVA diagnostics, unbounded listener PASS' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
             A) ORIGINAL_BOOT="phase447b-variants/A-wave2-battery-only.boot.img" ;;
@@ -1026,9 +1035,9 @@ jobs:
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
               --dtb phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
-              --output phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img \
+              --output phase447b-variants/MANGROVE-P466-FASTRPC-DMA-LISTENER.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P466-FASTRPC-DMA-LISTENER.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1149,13 +1158,13 @@ jobs:
             phase447b-variants/P453-RAMOOPS-BOOT-AUDIT.txt
           if-no-files-found: error
           compression-level: 0
-      - name: Upload P465 ONE G boot (FastRPC mmap Oops guarded + P463 + P462)
+      - name: Upload P466 ONE G boot (ADSP CB DMA attach/map + unbounded listener, P463 + P462)
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P465-FASTRPC-MMAP-SAFE-G-${{ github.run_number }}
+          name: MANGROVE-P466-FASTRPC-DMA-LISTENER-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img
+            phase447b-variants/MANGROVE-P466-FASTRPC-DMA-LISTENER.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
             phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             phase447-inventory/P465-FASTRPC-MMAP-GUARD.json

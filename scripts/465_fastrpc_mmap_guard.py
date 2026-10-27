@@ -233,7 +233,27 @@ def check(s):
     ):
         if x not in s:
             raise RuntimeError("P465 generated source missing "+x)
-    if "dev_name(me->dev)" in s:
+    # P466: successful plain flags-0 mapping must attach + map on
+    # coherent and noncoherent ADSP CBs. The old dangling if silently
+    # skipped dma_buf_map_attachment() on coherent sessions.
+    if "if (!sess->smmu.coherent)" in s:
+        raise RuntimeError("P466 stale coherence-gated dma_buf_map_attachment")
+    for marker in ("P466 ADSP DMA-BUF map unconditionally after CB attach.",
+                   "P466 FASTRPC DMA_MAPPED path=regular",
+                   "P466 FASTRPC DMA_MAPPED path=NOMAP",
+                   "sess->smmu.sid = iommuspec.args[0];",
+                   "wait_for_completion_interruptible(&ctx->work);",
+                   "wait_for_completion(&ctx->work);",
+                   "P466 FASTRPC INVOKE_LONG_WAIT"):
+        if marker not in s:
+            raise RuntimeError("P466 required DMA or listener marker missing "+marker)
+    if ("wait_for_completion_interruptible_timeout(&ctx->work" in s or
+        "wait_for_completion_timeout(&ctx->work" in s or
+        "P461 FASTRPC RPC wait timeout 5000ms" in s):
+        raise RuntimeError("P466 legacy 5s invoke abort remains")
+    if s.count("P466 FASTRPC DMA_MAPPED path=") != 2:
+        raise RuntimeError("P466 missing one successful mapping SID/IOVA log")
+        if "dev_name(me->dev)" in s:
         raise RuntimeError("P465 NULL diagnostics still possible")
     if s.count("a52_p465_validate_map(fl,") != 3:
         raise RuntimeError("P465 changed map validator invocation count")
