@@ -165,8 +165,8 @@ destroy_minidump_dev:
 static int adsp_remove(struct platform_device *pdev)
 {
     struct qcom_adsp *adsp;
-    rproc_del(adsp->rproc);
-    return 0;
+	rproc_del(adsp->rproc);
+	return 0;
 }
 '''
     patched=patch_pas(fixture)
