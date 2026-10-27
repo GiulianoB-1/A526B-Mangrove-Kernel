@@ -35,64 +35,63 @@ def unique(s,old,new,what):
     return s.replace(old,new,1)
 
 def patch_pas(s):
-    if TAG in s:raise RuntimeError("P467 PAS double applied")
+    # The ACTUAL restored 5.10 PAS source already does
+    # device_init_wakeup(adsp->dev, true) and unwinds it. Previous P467
+    # incorrectly tried a second registration and failed during transform.
+    # Do not duplicate registration, and do not change manual PAS behavior.
+    if TAG in s:
+        raise RuntimeError("P467 PAS double applied")
     if "#include <linux/pm_wakeup.h>" not in s:
         s=unique(s, "#include <linux/platform_device.h>",
                  "#include <linux/platform_device.h>\n#include <linux/pm_wakeup.h>",
                  "explicit parent wakeup API header")
-    if ("A52_PHASE451_SM6350_ADSP_PAS_V1" not in s or
-        "P451 ADSP PROBE manual_start=1" not in s or
-        "rproc->auto_boot = desc->auto_boot;" not in s):
-        raise RuntimeError("P467 unexpected P451 PAS baseline")
+    for token in ("A52_PHASE451_SM6350_ADSP_PAS_V1",
+                  "P451 ADSP PROBE manual_start=1",
+                  "rproc->auto_boot = desc->auto_boot;"):
+        if token not in s:
+            raise RuntimeError("P467 unexpected P451 PAS baseline "+token)
     a,b=function(s,"adsp_probe")
     probe=s[a:b]
-    if re.search(r'device_init_wakeup\s*\(',probe):
-        raise RuntimeError("P467 PAS probe already initializes wakeup; audit required")
-    pattern=re.compile(r'(\tret = rproc_add\(rproc\);\n\tif \(ret\)\n\t\tgoto ([a-z_][a-z0-9_]*);\n)\n(\treturn 0;)', re.M)
-    matches=list(pattern.finditer(probe))
-    if len(matches)!=1:
-        raise RuntimeError(f"P467 PAS rproc_add success/failure gate count={len(matches)}")
-    m=matches[0];cleanup=m.group(2)
-    body=r'''/* P467 ADSP PAS WAKE_SOURCE. Remoteproc crash handler calls
-     * pm_stay_awake(rproc->dev.parent) in IRQ and pm_relax(parent)
-     * once recovery work is done. Must be a registered, enabled
-     * wakeup-capable PARENT, not just a wakeup-capable rproc child.
-     * Manual boot and the existing rproc suspend policy are unchanged.
-     */
-    ret = device_init_wakeup(&pdev->dev, true);
-    if (ret) {
-        dev_err(&pdev->dev, "P467 ADSP PAS WAKE_SOURCE failed rc=%d\n",
-                ret);
-        /* rproc_add succeeded: remove before normal probe unwinding. */
-        rproc_del(rproc);
-        goto CLEANUP_LABEL;
-    }
-    dev_info(&pdev->dev,
-             "P467 ADSP PAS WAKE_SOURCE enabled=%d can=%d parent=%s manual=1\n",
-             device_may_wakeup(&pdev->dev),
-             device_can_wakeup(&pdev->dev), dev_name(&pdev->dev));
-'''.replace("CLEANUP_LABEL",cleanup)
-    probe=probe[:m.end(1)]+ "\n" +body+probe[m.start(3):]
+    if probe.count("device_init_wakeup(adsp->dev, true)") != 1:
+        raise RuntimeError("P467 PAS missing existing 5.10 wakeup initialization")
+    if "adsp->dev = &pdev->dev;" not in probe:
+        raise RuntimeError("P467 wakeup source is not rproc platform parent")
+    if "if (ret)\n\t\tgoto deinit_wakeup_source;" not in probe:
+        raise RuntimeError("P467 PAS wakeup cleanup labels changed")
+    if "device_init_wakeup(adsp->dev, false);" not in probe:
+        raise RuntimeError("P467 PAS missing probe-failure wakeup cleanup")
+
+    old=("\tret = rproc_add(rproc);\n"
+         "\tif (ret)\n"
+         "\t\tgoto destroy_minidump_dev;\n\n"
+         "\treturn 0;")
+    new=r'''	ret = rproc_add(rproc);
+	if (ret)
+		goto destroy_minidump_dev;
+
+	/* P467 ADSP PAS WAKE_SOURCE: 5.10 already registers the wakeup
+	 * source above. Verify it is the rproc parent, not an unrelated
+	 * device; rproc_report_crash uses pm_stay_awake(rproc->dev.parent).
+	 * This does NOT prove async GLINK/RPMSG reprobe completion.
+	 */
+	dev_info(&pdev->dev,
+		 "P467 ADSP PAS WAKE_SOURCE inherited=1 enabled=%d can=%d parent=%s rproc_parent=%s manual=1\n",
+		 device_may_wakeup(&pdev->dev), device_can_wakeup(&pdev->dev),
+		 dev_name(&pdev->dev), dev_name(rproc->dev.parent));
+	if (!device_may_wakeup(&pdev->dev))
+		dev_warn(&pdev->dev,
+			 "P467 ADSP PAS WAKE_SOURCE DISABLED after rproc_add: pm_stay_awake will not protect SSR\n");
+	return 0;'''
+    probe=unique(probe,old,new,"log existing PAS wakeup after rproc registration")
     s=s[:a]+probe+s[b:]
-    # Disable only after rproc_del; keep wakeup active through teardown.
-    # The generated G PAS must have a conventional adsp_remove path.
-    m=re.search(r'(?m)^static\s+int\s+adsp_remove\s*\([^;{}]*?\)\s*\{',s)
-    if not m:raise RuntimeError("P467 missing PAS remove")
-    depth=0;end=None
-    for i in range(m.end()-1,len(s)):
-        if s[i]=='{':depth+=1
-        elif s[i]=='}':
-            depth-=1
-            if depth==0:end=i+1;break
-    if end is None:raise RuntimeError("P467 unterminated remove")
-    remove=s[m.start():end]
-    remove=unique(remove,
-        "\trproc_del(adsp->rproc);",
-        '\trproc_del(adsp->rproc);\n'
-        '\tdevice_init_wakeup(&pdev->dev, false);\n'
-        '\tdev_info(&pdev->dev, "P467 ADSP PAS WAKE_SOURCE disabled after rproc_del\\n");',
-        "unregister PAS wakeup")
-    s=s[:m.start()]+remove+s[end:]
+    # Preserve the existing 5.10 remove ordering, not a second teardown.
+    a,b=function(s,"adsp_remove")
+    remove=s[a:b]
+    if remove.count("device_init_wakeup(adsp->dev, false);") != 1:
+        raise RuntimeError("P467 PAS missing original remove wakeup cleanup")
+    if not (remove.index("rproc_del(adsp->rproc);") <
+            remove.index("device_init_wakeup(adsp->dev, false);")):
+        raise RuntimeError("P467 PAS wakeup removed before rproc teardown")
     return s
 
 def patch_rpc(s):
@@ -109,23 +108,30 @@ def patch_rpc(s):
 def check_pas(s):
     a,b=function(s,"adsp_probe")
     probe=s[a:b]
-    if probe.count("device_init_wakeup(&pdev->dev, true)")!=1 or TAG not in probe:
-        raise RuntimeError("P467 PAS wake source not enabled exactly once")
-    if not (probe.index("rproc_add(rproc)") <
-            probe.index("device_init_wakeup(&pdev->dev, true)") <
-            probe.index("P467 ADSP PAS WAKE_SOURCE enabled")):
-        raise RuntimeError("P467 PAS wakeup placement invalid")
-    if "rproc_del(rproc);" not in probe[probe.index("device_init_wakeup(&pdev->dev, true)"):]:
-        raise RuntimeError("P467 PAS wakeup registration failure lacks rproc_del")
-    ix=s.index("static int adsp_remove(")
-    cleanup=s[ix:]
-    if not (cleanup.index("rproc_del(adsp->rproc)") <
-            cleanup.index("device_init_wakeup(&pdev->dev, false)")):
-        raise RuntimeError("P467 PAS unregister must follow rproc_del")
-    for invariant in (".auto_boot = false","P451 ADSP PROBE manual_start=1",
-                      "regulator_set_voltage(adsp->cx_supply,384,0xffff)",
-                      "regulator_set_voltage(adsp->px_supply,384,0xffff)"):
-        if invariant not in s:raise RuntimeError("P467 PAS invariant lost: "+invariant)
+    for token in ("adsp->dev = &pdev->dev;",
+                  "device_init_wakeup(adsp->dev, true)",
+                  "device_init_wakeup(adsp->dev, false)",
+                  "P467 ADSP PAS WAKE_SOURCE inherited=1",
+                  "device_may_wakeup(&pdev->dev)",
+                  "rproc_add(rproc)"):
+        if token not in probe:
+            raise RuntimeError("P467 PAS source contract missing "+token)
+    if probe.count("device_init_wakeup(adsp->dev, true)") != 1:
+        raise RuntimeError("P467 PAS double init wakeup")
+    if not (probe.index("device_init_wakeup(adsp->dev, true)") <
+            probe.index("rproc_add(rproc)") <
+            probe.index("P467 ADSP PAS WAKE_SOURCE inherited=1")):
+        raise RuntimeError("P467 PAS registration/log placement incorrect")
+    a,b=function(s,"adsp_remove")
+    remove=s[a:b]
+    if not (remove.index("rproc_del(adsp->rproc);") <
+            remove.index("device_init_wakeup(adsp->dev, false);")):
+        raise RuntimeError("P467 remove order must keep wakeup through rproc_del")
+    for token in (".auto_boot = false","P451 ADSP PROBE manual_start=1",
+                  "regulator_set_voltage(adsp->cx_supply,384,0xffff)",
+                  "regulator_set_voltage(adsp->px_supply,384,0xffff)"):
+        if token not in s:
+            raise RuntimeError("P467 manual-PAS invariant lost "+token)
 
 def check_rpc(s):
     a,b=function(s,"fastrpc_init_create_static_process")
@@ -149,34 +155,47 @@ def selftest():
     donor=Path("vendor/p461/a52-5.10-port/drivers/char/adsprpc.c").read_text()
     generated=g466["patch"](g465["patch"](g461["transform"](donor)))
     check_rpc(patch_rpc(generated))
-    # PAS is restored from an exact source tarball later in CI. Exercise
-    # the rproc_add/cleanup anchor and require matching real-source gate.
+    # Synthetic fixture follows the already-wakeup-capable 5.10 PAS
+    # ownership/lifecycle; no extra device_init_wakeup is permitted.
     fixture='''#include <linux/platform_device.h>
 static int adsp_probe(struct platform_device *pdev)
 {
+    struct qcom_adsp *adsp;
     struct rproc *rproc;
     int ret;
     rproc->auto_boot = desc->auto_boot;
     /* A52_PHASE451_SM6350_ADSP_PAS_V1 */
     dev_info(&pdev->dev,"P451 ADSP PROBE manual_start=1");
+    adsp->dev = &pdev->dev;
+    ret = device_init_wakeup(adsp->dev, true);
+    if (ret)
+        goto free_rproc;
+    ret = adsp_alloc_memory_region(adsp);
+    if (ret)
+		goto deinit_wakeup_source;
 	ret = rproc_add(rproc);
 	if (ret)
 		goto destroy_minidump_dev;
 
 	return 0;
 destroy_minidump_dev:
+deinit_wakeup_source:
+    device_init_wakeup(adsp->dev, false);
+free_rproc:
     return ret;
 }
 static int adsp_remove(struct platform_device *pdev)
 {
     struct qcom_adsp *adsp;
 	rproc_del(adsp->rproc);
+    device_init_wakeup(adsp->dev, false);
 	return 0;
 }
 '''
     patched=patch_pas(fixture)
-    if "P467 ADSP PAS WAKE_SOURCE" not in patched:
-        raise RuntimeError("P467 PAS fixture did not inject wakeup")
+    check_pas(patched)
+    if patched.count("device_init_wakeup(adsp->dev, true)") != 1:
+        raise RuntimeError("P467 selftest duplicate wakeup source")
     print("P467 PINNED FASTRPC + PAS ANCHOR SELFTEST PASS")
 
 def main():
@@ -201,8 +220,9 @@ def main():
         pf.write_text(ps)
         rf.write_text(rs)
     check_pas(ps);check_rpc(rs)
-    report={"parent_wakeup_enabled":True,
-            "parent_wakeup_removed_after_rproc_del":True,
+    report={"parent_wakeup_already_initialized_in_5_10":True,
+            "parent_wakeup_status_logged":True,
+            "parent_wakeup_lifecycle_original_unchanged":True,
             "manual_pas_unchanged":True,
             "pm_stay_awake_core_unchanged":True,
             "audioPD_fast_refusal":"EOPNOTSUPP + once warning",
