@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P465 adsprpc mmap NULL/heap/SG guards + P463 suspend-safe H0, P460B frozen
+run-name: P466 ADSP CB coherent DMA-BUF maps + unbounded reverse-RPC + P463 suspend guard
 on:
   push:
     branches:
@@ -9,6 +9,7 @@ on:
       - agent/p461-sensors-adsprpc-active
       - agent/p464-fastrpc-p463-guard-combined
       - agent/p465-fastrpc-mmap-guard
+      - agent/p466-fastrpc-mapped-dmabuf-listener
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -91,6 +92,8 @@ jobs:
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
+          python3 -m py_compile scripts/466_fastrpc_dma_listener.py
+          python3 scripts/466_fastrpc_dma_listener.py --selftest
           python3 scripts/446_apply_heartbeat_cb2.py --help >/dev/null
           python3 scripts/446b_apply_heartbeat_fixes.py --help >/dev/null
           python3 scripts/446c_apply_takeover_window.py --help >/dev/null
@@ -267,7 +270,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_listener.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -310,6 +313,11 @@ jobs:
             python3 scripts/465_fastrpc_mmap_guard.py --root "$ROOT" \
               --report phase447-inventory/P465-FASTRPC-MMAP-GUARD.json
             python3 scripts/465_fastrpc_mmap_guard.py --root "$ROOT" --check-only
+            # P466: repair P461 coherent-CB conditional that skipped the
+            # actual DMA-BUF map for mflags=0; undo 5s listener abort.
+            python3 scripts/466_fastrpc_dma_listener.py --root "$ROOT" \
+              --report phase447-inventory/P466-DMA-BUF-LISTENER-SAFETY.json
+            python3 scripts/466_fastrpc_dma_listener.py --root "$ROOT" --check-only
             "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
               --enable MSM_ADSPRPC --enable PSTORE_RAM --enable PSTORE \
               --enable PSTORE_CONSOLE --enable PSTORE_PMSG --enable REED_SOLOMON
@@ -913,6 +921,13 @@ jobs:
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P465 missing mmap guard Image marker::$marker"; exit 1; }
             done
             echo 'P465 linked mmap crash guard, flags logging, heap fail-closed and CB DMA validation PASS' >> "$GITHUB_STEP_SUMMARY"
+            for marker in 'P466 FASTRPC DMA_MAP_OK fd=' 'P466 FASTRPC INVOKE_WAIT_LONG' 'P466 FASTRPC DMA LISTENER V1'; do
+              grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P466 missing compiled FastRPC fix::$marker"; exit 1; }
+            done
+            if grep -aFq 'P461 FASTRPC RPC wait timeout 5000ms' workspace/gki-phase199-out/arch/arm64/boot/Image; then
+              echo '::error title=P466 stale bounded invoke wait::P461 5s timeout still linked'; exit 1
+            fi
+            echo 'P466 link PASS: real CB DMA-BUF map and unbounded interruptible invoke waits' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
             A) ORIGINAL_BOOT="phase447b-variants/A-wave2-battery-only.boot.img" ;;
@@ -1026,9 +1041,9 @@ jobs:
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
               --dtb phase447b-variants/P461-ADSP-ONLY-PREBUILD.dtb \
-              --output phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img \
+              --output phase447b-variants/MANGROVE-P466-ADSP-DMABUF-LISTENER.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P466-ADSP-DMABUF-LISTENER.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1149,16 +1164,18 @@ jobs:
             phase447b-variants/P453-RAMOOPS-BOOT-AUDIT.txt
           if-no-files-found: error
           compression-level: 0
-      - name: Upload P465 ONE G boot (FastRPC mmap Oops guarded + P463 + P462)
+      - name: Upload P466 ONE G boot (FastRPC DMA-BUF listener + P465 + P463 + P462)
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P465-FASTRPC-MMAP-SAFE-G-${{ github.run_number }}
+          name: MANGROVE-P466-ADSP-DMABUF-LISTENER-G-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P465-FASTRPC-MMAP-SAFE-GUARD.boot.img
+            phase447b-variants/MANGROVE-P466-ADSP-DMABUF-LISTENER.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
             phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             phase447-inventory/P465-FASTRPC-MMAP-GUARD.json
+            phase447-inventory/P466-DMA-BUF-LISTENER-SAFETY.json
+            scripts/466_fastrpc_dma_listener.py
             scripts/465_fastrpc_mmap_guard.py
             scripts/463_guard_suspend_safe.py
             scripts/461_pack_adsp_sensor_boot.py
