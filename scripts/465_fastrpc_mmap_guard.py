@@ -112,6 +112,30 @@ static int a52_p465_validate_map(struct fastrpc_file *fl,
     )
     s = s.replace(sg, check_sg + sg)
 
+    # The exact original P464 DWARF maps +0x3a4/0x79c to
+    # drivers/char/adsprpc.c:1591:
+    #     map->phys = sg_dma_address(map->table->sgl);
+    # Protect map->table ITSELF before any ->nents or ->sgl access.
+    # A later !map->table->sgl check is insufficient for NULL table.
+    null_table_guard = (
+        "\t\tif (IS_ERR_OR_NULL(map->table)) {\n"
+        "\t\t\terr = IS_ERR(map->table) ? PTR_ERR(map->table) : -EIO;\n"
+        "\t\t\tpr_warn_ratelimited(\"P465 FASTRPC NULL_TABLE fd=%d flags=%#x errno=%d\\n\",\n"
+        "\t\t\t\tfd, mflags, err);\n"
+        "\t\t\tgoto bail;\n"
+        "\t\t}\n"
+    )
+    s = edit_function(s, "fastrpc_mmap_create",
+                      "\t\tVERIFY(err, map->table->nents == 1);",
+                      null_table_guard +
+                      "\t\tVERIFY(err, map->table->nents == 1);",
+                      "NOMAP NULL table before nents")
+    s = edit_function(s, "fastrpc_mmap_create",
+                      "\t\tif (!sess->smmu.enabled) {",
+                      null_table_guard +
+                      "\t\tif (!sess->smmu.enabled) {",
+                      "ordinary DMA_BUF NULL table before nents/sgl")
+
     # Catch both user mmap ioctls before dereferencing fl or ud. Flags
     # are printed in decimal-independent hex at every test round.
     for name, field, fd, size, op in (
@@ -191,6 +215,7 @@ def check(s):
         "P465 FASTRPC MMAP fd=%d flags=%#x",
         "P465 FASTRPC MEM_MAP fd=%d flags=%#x",
         "P465 FASTRPC EMPTY_SG fd=%d flags=%#x",
+        "P465 FASTRPC NULL_TABLE fd=%d flags=%#x errno=%d",
         "P465 FASTRPC MUNMAP invalid_ioctl",
         "P465 FASTRPC MEM_UNMAP invalid_ioctl",
         "fd, len, dev_name(fl->sctx->smmu.dev), PTR_ERR(map->table));",
@@ -205,10 +230,27 @@ def check(s):
         raise RuntimeError("P465 changed map validator invocation count")
     if s.count("dma_buf_attach(") != 2:
         raise RuntimeError("P465 changed CB DMA attach callsites")
-    if s.count("P465 FASTRPC EMPTY_SG fd=") != 1:
-        # one source string repeated twice, expect two occurrences.
-        if s.count("P465 FASTRPC EMPTY_SG fd=") != 2:
-            raise RuntimeError("P465 SG protection count changed")
+    if s.count("P465 FASTRPC EMPTY_SG fd=") != 2:
+        raise RuntimeError("P465 SG entries not guarded on both mmap branches")
+    if s.count("P465 FASTRPC NULL_TABLE fd=") != 2:
+        raise RuntimeError("P465 missing NULL table guard on one mmap branch")
+    create=s[s.index("static int fastrpc_mmap_create("):
+             s.index("static inline bool fastrpc_get_cached_buf(")]
+    if create.count("sg_dma_address(map->table->sgl)") != 2:
+        raise RuntimeError("P465 mapping site changed or missing")
+    if not (create.index("P465 FASTRPC NULL_TABLE fd=") <
+            create.index("VERIFY(err, map->table->nents == 1)") <
+            create.index("sg_dma_address(map->table->sgl)") <
+            create.rindex("P465 FASTRPC NULL_TABLE fd=") <
+            create.index("if (!sess->smmu.enabled)") <
+            create.rindex("sg_dma_address(map->table->sgl)")):
+        raise RuntimeError("P465 NULL-table guards must PRECEDE both nents/sgl uses")
+    free=s[s.index("static void fastrpc_mmap_free("):
+           s.index("static int fastrpc_session_alloc(")]
+    if not (free.index("if (me->dev == NULL)") <
+            free.index("goto bail;",free.index("if (me->dev == NULL)")) <
+            free.rindex("bail:") < free.rindex("kfree(map);")):
+        raise RuntimeError("P465 remoteheap free must jump directly to kfree")
     return {"heap_flags":"EOPNOTSUPP before any map allocation",
             "DMA_device":"fl->sctx->smmu.dev",
             "supported_maps":"DMA_BUF / NOMAP / ADD_PAGES with CB validation",
