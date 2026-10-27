@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P464 combined P461 round-2 FastRPC and P463 PM-safe guard, ECC48, P460B frozen
+run-name: P464 exact original vmlinux faddr2line mmap Oops forensic
 on:
   push:
     branches:
@@ -8,6 +8,7 @@ on:
       - agent/p462-s2idle-wdt-pstore-live
       - agent/p461-sensors-adsprpc-active
       - agent/p464-fastrpc-p463-guard-combined
+      - agent/p464-mmap-original-symbols
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -843,6 +844,29 @@ jobs:
           cp "$BUILD/.config" phase446af-debug/final.config
           readelf -SW phase446af-debug/vmlinux | grep -F '.debug_info'
           printf '%s\n' "P446AF DWARF vmlinux retained for exact offset decoding" >> "$GITHUB_STEP_SUMMARY"
+      - name: P464 exact original FastRPC mmap Oops symbolization
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p phase447-inventory
+          test -s phase446af-debug/vmlinux
+          {
+            echo 'BASE=original P464 a9ae948bc80ed4fb68f8ca081b83304cfb022328'
+            echo 'SYMBOL=fastrpc_mmap_create+0x3a4/0x79c'
+            echo 'REPLAY=scripts/faddr2line phase446af-debug/vmlinux fastrpc_mmap_create+0x3a4/0x79c'
+            scripts/faddr2line phase446af-debug/vmlinux 'fastrpc_mmap_create+0x3a4/0x79c' || \
+              gki/common/scripts/faddr2line phase446af-debug/vmlinux 'fastrpc_mmap_create+0x3a4/0x79c'
+            grep '^CONFIG_DEBUG_INFO' phase446af-debug/final.config || true
+          } | tee phase447-inventory/P464-ORIGINAL-MMAP-ADDR2LINE.txt
+          cat phase447-inventory/P464-ORIGINAL-MMAP-ADDR2LINE.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload exact original P464 mmap symbolization
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: P464-ORIGINAL-MMAP-ADDR2LINE-${{ github.run_number }}
+          path: phase447-inventory/P464-ORIGINAL-MMAP-ADDR2LINE.txt
+          if-no-files-found: warn
+          compression-level: 0
       - name: Save exact per-variant Kbuild objects
         if: success() && steps.kbuild_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
