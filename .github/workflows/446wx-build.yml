@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P467 MSS manual first boot, TG UIO RMTFS, no IPA, P466+P463 preserved
+run-name: P468 MSS RIL subsys_modem real remoteproc compatibility, exact P467 run 40749455719
 on:
   push:
     branches:
@@ -11,6 +11,7 @@ on:
       - agent/p465-fastrpc-mmap-guard
       - agent/p466-fastrpc-real-dmabuf-no-invoke-timeout
       - agent/p467-mss-firstboot-p466
+      - agent/p468-mss-ril-compat-p467-40749455719
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -95,7 +96,7 @@ jobs:
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
           python3 -m py_compile scripts/466_fastrpc_dma_wait.py
           python3 scripts/466_fastrpc_dma_wait.py --selftest
-          python3 -m py_compile scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py
+          python3 -m py_compile scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py scripts/468_mss_ril_compat_source.py scripts/468_mss_ril_compat_dtb.py
           python3 scripts/446_apply_heartbeat_cb2.py --help >/dev/null
           python3 scripts/446b_apply_heartbeat_fixes.py --help >/dev/null
           python3 scripts/446c_apply_takeover_window.py --help >/dev/null
@@ -272,7 +273,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_wait.py scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_wait.py scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py scripts/468_mss_ril_compat_source.py scripts/468_mss_ril_compat_dtb.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -328,6 +329,13 @@ jobs:
             python3 scripts/467_mss_rmtfs_source.py --root "$ROOT" \
               --report phase447-inventory/P467-MSS-RMTFS-UIO.json
             python3 scripts/467_mss_rmtfs_source.py --root "$ROOT" --check-only
+            # P468 is applied ONLY AFTER the P467 source: existing TG SSR subsystem bus.
+            python3 scripts/468_mss_ril_compat_source.py --root "$ROOT" \
+              --report phase447-inventory/P468-MSS-RIL-SUBSYS-SOURCE.json
+            python3 scripts/468_mss_ril_compat_source.py --root "$ROOT" --check-only
+            grep -Fxq "CONFIG_MSM_SUBSYSTEM_RESTART=y" "$PWD/workspace/gki-phase199-out/.config" || {
+              echo "::error title=P468 TG SSR bus not enabled::required CONFIG_MSM_SUBSYSTEM_RESTART=y"; exit 1;
+            }
             "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
               --enable A52_MSS_RMTFS_UIO --enable UIO --enable MSM_ADSPRPC --enable PSTORE_RAM --enable PSTORE \
               --enable PSTORE_CONSOLE --enable PSTORE_PMSG --enable REED_SOLOMON
@@ -943,7 +951,11 @@ jobs:
             for marker in 'P467 MSS PROBE manual_start=1' 'P467 MSS RAILS cx=384 mss=384' 'P467 MSS PAS_AUTH rc=0' 'P467 MSS GLINK REGISTER' 'P467 RMTFS UIO client=' 'P467 PAS PARENT_WAKE enabled='; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P467 MSS mandatory linked Image marker missing::$marker"; exit 1; }
             done
-            echo 'P467 MSS/ADSP PAS wakeup and guarded RMTFS UIO linked; P466/P463 retained' >> "$GITHUB_STEP_SUMMARY"
+            for marker in "P468 MSS SUBSYS REGISTER name=modem" "P468 MSS SUBSYS OPEN boot_rc=0" "/vendor/firmware-modem/image"; do
+              grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P468 linked Image marker missing::$marker"; exit 1; }
+            done
+            grep -Fq "P468 MSS SUBSYS STATE" "$ROOT/drivers/soc/qcom/subsystem_restart.c"
+            echo 'P468 modem subsystem char device + actual remoteproc sysfs state + firmware direct search linked; P467/P466/P463/P462 retained' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
             A) ORIGINAL_BOOT="phase447b-variants/A-wave2-battery-only.boot.img" ;;
@@ -1062,14 +1074,23 @@ jobs:
               --dtb-out phase447b-variants/P467-MSS-CHECKED.dtb \
               --report phase447b-variants/P467-MSS-DTB-CHECK.json
             cmp phase447b-variants/P467-MSS-CHECKED.dtb phase447b-variants/P467-MSS-MANUAL-PREBUILD.dtb
+            python3 scripts/468_mss_ril_compat_dtb.py \
+              --dtb-in phase447b-variants/P467-MSS-MANUAL-PREBUILD.dtb \
+              --dtb-out phase447b-variants/P468-MSS-SUBSYS.dtb \
+              --report phase447b-variants/P468-MSS-SUBSYS-DTB.json
+            python3 scripts/468_mss_ril_compat_dtb.py --check-only \
+              --dtb-in phase447b-variants/P468-MSS-SUBSYS.dtb \
+              --dtb-out phase447b-variants/P468-MSS-SUBSYS-CHECK.dtb \
+              --report phase447b-variants/P468-MSS-SUBSYS-DTB-CHECK.json
+            cmp phase447b-variants/P468-MSS-SUBSYS.dtb phase447b-variants/P468-MSS-SUBSYS-CHECK.dtb
             # Unlike P461 audit-only runs: this is the ACTUAL uploaded G
             # boot.img, with ADSP-only CB10/11/12 and 48-byte ECC. Keep
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
-              --dtb phase447b-variants/P467-MSS-MANUAL-PREBUILD.dtb \
-              --output phase447b-variants/MANGROVE-P467-MSS-MANUAL-RMTFS-NO-IPA.boot.img \
+              --dtb phase447b-variants/P468-MSS-SUBSYS.dtb \
+              --output phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P467-MSS-MANUAL-RMTFS-NO-IPA.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1190,19 +1211,24 @@ jobs:
             phase447b-variants/P453-RAMOOPS-BOOT-AUDIT.txt
           if-no-files-found: error
           compression-level: 0
-      - name: Upload P467 ONE G boot (manual MSS PAS4 + TG RMTFS UIO, no IPA, P466 P463 P462)
+      - name: Upload P468 ONE G boot (P467 baseline + real modem subsystem ABI, no IPA)
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P467-MSS-MANUAL-RMTFS-G-${{ github.run_number }}
+          name: MANGROVE-P468-MSS-RIL-COMPAT-G-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P467-MSS-MANUAL-RMTFS-NO-IPA.boot.img
+            phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
             phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             phase447-inventory/P465-FASTRPC-MMAP-GUARD.json
             phase447-inventory/P466-FASTRPC-CB-DMA-WAIT.json
             phase447-inventory/P467-MSS-PAS-SOURCE.json
             phase447-inventory/P467-MSS-RMTFS-UIO.json
+            phase447-inventory/P468-MSS-RIL-SUBSYS-SOURCE.json
+            phase447b-variants/P468-MSS-SUBSYS-DTB.json
+            phase447b-variants/P468-MSS-SUBSYS.dtb
+            scripts/468_mss_ril_compat_source.py
+            scripts/468_mss_ril_compat_dtb.py
             phase447b-variants/P467-MSS-DTB-MANIFEST.json
             phase447b-variants/P467-MSS-MANUAL-PREBUILD.dtb
             scripts/467_mss_pas_source.py
