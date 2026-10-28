@@ -167,7 +167,13 @@ def patch_ssr(s):
                          online ? "ONLINE" : "OFFLINE");
     }
 '''
-    part=part[:marker.end()]+check+part[marker.end():]
+    # Linux 5.10 uses -Wdeclaration-after-statement for legacy code.
+    # Move the TG local declaration before the modem state early return.
+    state_decl="\tenum subsys_state state = to_subsys(dev)->track.state;\n"
+    if part.count(state_decl) != 1:
+        raise RuntimeError("P468 state_show local declaration drift")
+    part=part.replace(state_decl,"",1)
+    part=part[:marker.end()]+"\n"+state_decl+check+part[marker.end():]
     s=s[:a]+part+s[b:]
     # P468 guard: legacy TG subsys_stop() normally sends an SSR sysmon
     # shutdown QMI before desc->shutdown(). For this modem shim that would
