@@ -166,7 +166,19 @@ def patch_ssr(s):
     }
 '''
     part=part[:marker.end()]+check+part[marker.end():]
-    return s[:a]+part+s[b:]
+    s=s[:a]+part+s[b:]
+    # P468 guard: legacy TG subsys_stop() normally sends an SSR sysmon
+    # shutdown QMI before desc->shutdown(). For this modem shim that would
+    # incorrectly command a shutdown while a manual sysfs rproc reference
+    # may still own the running MSS. Let rproc_shutdown() balance *only*
+    # the SSR power reference; do not preempt it with a sysmon request.
+    old_stop='''\tif (!of_property_read_bool(subsys->desc->dev->of_node,
+\t\t\t\t\t"qcom,pil-force-shutdown")) {'''
+    new_stop='''\t/* P468 MSS SUBSYS STOP: real rproc owns MSS shutdown votes. */
+\tif (strcmp(name, "modem") &&
+\t    !of_property_read_bool(subsys->desc->dev->of_node,
+\t\t\t\t\t"qcom,pil-force-shutdown")) {'''
+    return replace_once(s,old_stop,new_stop,"no competing modem sysmon shutdown")
 
 def patch_fw(s):
     if 'P468 MSS FIRMWARE PATH' in s:raise RuntimeError("P468 firmware already applied")
@@ -187,7 +199,7 @@ def check(root):
               'subsys_unregister(adsp->a52_modem_ssr);',
               "P467 MSS PAS_AUTH rc=0"):
         if k not in pas:raise RuntimeError("P468 PAS missing "+k)
-    for k in ("P468 MSS SUBSYS STATE", "rproc_get_by_phandle",
+    for k in ("P468 MSS SUBSYS STATE", "P468 MSS SUBSYS STOP", "rproc_get_by_phandle",
               "RPROC_RUNNING", 'online ? "ONLINE" : "OFFLINE"'):
         if k not in ssr:raise RuntimeError("P468 state mirror missing "+k)
     for k in ("P468 MSS FIRMWARE PATH", '"/vendor/firmware-modem/image"'):
