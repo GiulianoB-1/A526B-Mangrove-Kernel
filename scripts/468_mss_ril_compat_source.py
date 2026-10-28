@@ -8,6 +8,7 @@ from pathlib import Path
 PAS=Path("drivers/remoteproc/qcom_q6v5_pas.c")
 SSR=Path("drivers/a52_pil/subsystem_restart.c")
 FW=Path("drivers/base/firmware_loader/main.c")
+PAS_MAKEFILE=Path("drivers/remoteproc/Makefile")
 TAG="P468 MSS SUBSYS"
 
 def replace_once(s,old,new,why):
@@ -190,10 +191,20 @@ def patch_fw(s):
                         '\t"/vendor/firmware-modem/image",\n',
                         "firmware path insertion")
 
+def patch_pas_makefile(s):
+    marker="# P468 MSS SUBSYS: only qcom_q6v5_pas needs the Phase263 TG SSR header."
+    if marker in s:raise RuntimeError("P468 PAS Kbuild already applied")
+    if "obj-$(CONFIG_QCOM_Q6V5_PAS)" not in s:
+        raise RuntimeError("P468 upstream PAS Makefile target absent")
+    return s.rstrip()+"\\n"+marker+"\\n"+(
+        "CFLAGS_qcom_q6v5_pas.o += -I$(srctree)/a52-compat/include\\n"
+    )
+
 def check(root):
     pas=(root/PAS).read_text()
     ssr=(root/SSR).read_text()
     fw=(root/FW).read_text()
+    pas_mk=(root/PAS_MAKEFILE).read_text()
     for k in (TAG,"a52_modem_subsys_powerup","a52_modem_subsys_shutdown",
               'ssr->name = "modem";','subsys_register(ssr)',
               'subsys_unregister(adsp->a52_modem_ssr);',
@@ -202,6 +213,8 @@ def check(root):
     for k in ("P468 MSS SUBSYS STATE", "P468 MSS SUBSYS STOP", "rproc_get_by_phandle",
               "RPROC_RUNNING", 'online ? "ONLINE" : "OFFLINE"'):
         if k not in ssr:raise RuntimeError("P468 state mirror missing "+k)
+    if "CFLAGS_qcom_q6v5_pas.o += -I$(srctree)/a52-compat/include" not in pas_mk:
+        raise RuntimeError("P468 PAS missing TG include flag")
     for k in ("P468 MSS FIRMWARE PATH", '"/vendor/firmware-modem/image"'):
         if k not in fw:raise RuntimeError("P468 firmware path missing "+k)
     return {"device":"subsys_modem","sysfs_bus":"msm_subsys",
@@ -218,7 +231,10 @@ def main():
     ap.add_argument("--report",type=Path)
     args=ap.parse_args()
     if not args.check_only:
-        for path,fn in [(PAS,patch_pas),(SSR,patch_ssr),(FW,patch_fw)]:
+        hdr=args.root/"a52-compat/include/soc/qcom/subsystem_restart.h"
+        if not hdr.is_file():
+            raise RuntimeError("P468 Phase263 SSR compat header not staged: "+str(hdr))
+        for path,fn in [(PAS,patch_pas),(SSR,patch_ssr),(FW,patch_fw),(PAS_MAKEFILE,patch_pas_makefile)]:
             p=args.root/path
             text=p.read_text()
             patched=fn(text)
