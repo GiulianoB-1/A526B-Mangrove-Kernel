@@ -898,6 +898,8 @@ jobs:
         if: success()
         run: |
           set -Eeuo pipefail
+          ROOT="$PWD/gki/common"
+          test -f "$ROOT/drivers/a52_pil/subsystem_restart.c"
           bash scripts/446z_package_preserved.sh
           python3 -m py_compile scripts/447c_finalize_variant.py
           python3 scripts/447c_finalize_variant.py \
