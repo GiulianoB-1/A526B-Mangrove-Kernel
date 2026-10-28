@@ -127,8 +127,9 @@ static int a52_modem_subsys_shutdown(const struct subsys_desc *desc,
     s=replace_once(s,original,updated,"rproc registration")
     s=replace_once(s,
                    '\trproc_del(adsp->rproc);\n\n\tqcom_remove_glink_subdev',
-                   '''    if (adsp->a52_modem_ssr)
-        subsys_unregister(adsp->a52_modem_ssr);
+                   '''\tif (adsp->a52_modem_ssr) {
+\t\tsubsys_unregister(adsp->a52_modem_ssr);
+\t}
 \trproc_del(adsp->rproc);
 
 \tqcom_remove_glink_subdev''',"remove ownership")
