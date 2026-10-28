@@ -954,7 +954,7 @@ jobs:
             for marker in "P468 MSS SUBSYS REGISTER name=modem" "P468 MSS SUBSYS OPEN boot_rc=0" "/vendor/firmware-modem/image"; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P468 linked Image marker missing::$marker"; exit 1; }
             done
-            grep -Fq "P468 MSS SUBSYS STATE" "$ROOT/drivers/soc/qcom/subsystem_restart.c"
+            grep -Fq "P468 MSS SUBSYS STATE" "$ROOT/drivers/a52_pil/subsystem_restart.c"
             echo 'P468 modem subsystem char device + actual remoteproc sysfs state + firmware direct search linked; P467/P466/P463/P462 retained' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
