@@ -196,8 +196,8 @@ def patch_pas_makefile(s):
     if marker in s:raise RuntimeError("P468 PAS Kbuild already applied")
     if "obj-$(CONFIG_QCOM_Q6V5_PAS)" not in s:
         raise RuntimeError("P468 upstream PAS Makefile target absent")
-    return s.rstrip()+"\\n"+marker+"\\n"+(
-        "CFLAGS_qcom_q6v5_pas.o += -I$(srctree)/a52-compat/include\\n"
+    return s.rstrip()+"\n"+marker+"\n"+(
+        "CFLAGS_qcom_q6v5_pas.o += -I$(srctree)/a52-compat/include\n"
     )
 
 def check(root):
