@@ -6,7 +6,7 @@ import argparse, json, re
 from pathlib import Path
 
 PAS=Path("drivers/remoteproc/qcom_q6v5_pas.c")
-SSR=Path("drivers/soc/qcom/subsystem_restart.c")
+SSR=Path("drivers/a52_pil/subsystem_restart.c")
 FW=Path("drivers/base/firmware_loader/main.c")
 TAG="P468 MSS SUBSYS"
 
@@ -135,6 +135,8 @@ static int a52_modem_subsys_shutdown(const struct subsys_desc *desc,
 
 def patch_ssr(s):
     if "P468 MSS SUBSYS STATE" in s:raise RuntimeError("P468 SSR already applied")
+    if "A52_PHASE263_SSR_GKI510_API_V2" not in s:
+        raise RuntimeError("P468 requires pinned Phase263 downstream SSR provider")
     s=replace_once(s,'#include <linux/cdev.h>',
                    '#include <linux/cdev.h>\n#include <linux/remoteproc.h>',
                    "SSR include")
