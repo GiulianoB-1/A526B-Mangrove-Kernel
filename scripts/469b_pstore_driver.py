@@ -61,14 +61,20 @@ def patch(s):
         "\tret = platform_driver_register(&ramoops_driver);\n"
         "\tpr_info(\"P469B PSTORE INIT register_rc=%d\\n\", ret);\n",
         "initcall trace")
-    if "postcore_initcall(ramoops_init);" not in s:
-        raise RuntimeError("missing postcore_initcall; no silent fallback")
+    # The exact restored Mangrove tree may use a different registration
+    # macro for this init function. Require the real init function and its
+    # platform-driver registration, but do not prescribe its initcall level.
+    # P469 #598 proved that ram.o is built into the final Image.
+    for required in ("static int __init ramoops_init(void)",
+                     "platform_driver_register(&ramoops_driver);"):
+        if required not in s:
+            raise RuntimeError("P469b pstore missing real init path: " + required)
     return s
 
 
 def check(s):
     for token in ("P469B PSTORE INIT enter", "P469B PSTORE INIT register_rc=",
-                  "P469B PSTORE DT_OWNER", "postcore_initcall(ramoops_init);",
+                  "P469B PSTORE DT_OWNER", "static int __init ramoops_init(void)",
                   "P461 PSTORE RAMOOPS_PROBE", 'of_device_is_available(np)',
                   "resource_size(&res) != 0x00100000"):
         if token not in s:
