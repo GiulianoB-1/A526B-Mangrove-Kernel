@@ -95,6 +95,7 @@ jobs:
           # source restore; no actual kernel source needed for this test.
           python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py scripts/469b_mss_offline_cleanup.py scripts/469b_pstore_driver.py
           python3 scripts/469_pstore_node_match.py --self-test
+          python3 scripts/469b_pstore_driver.py --self-test
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
