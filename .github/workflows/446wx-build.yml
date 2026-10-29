@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P469 MSS fatal crashloop guard and ramoops OF basename, exact P468b 596
+run-name: P469b MSS clean GLINK-QRTR shutdown and ramoops initcall trace, exact P469 598
 on:
   push:
     branches:
@@ -14,6 +14,7 @@ on:
       - agent/p468-mss-ril-compat-p467-40749455719
       - agent/p468b-modem-smem-ownership-p468-594
       - agent/p469-mss-fatal-guard-pstore-p468b-596
+      - agent/p469b-mss-offline-pstore-audit-from-598
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -92,7 +93,7 @@ jobs:
           python3 -m py_compile scripts/446_apply_heartbeat_cb2.py scripts/446b_apply_heartbeat_fixes.py scripts/446c_apply_takeover_window.py scripts/446g_apply_te_irq_test.py scripts/446h_apply_panel_f0_microscope.py scripts/446i_apply_passive_f0_twin.py scripts/446d_apply_power_clock_microscope.py scripts/446d_apply_capacity_guard.py scripts/446d_apply_extra_observers.py scripts/decode_phase446.py scripts/decode_phase446d.py scripts/decode_phase446g.py scripts/decode_phase446_pair.py scripts/446_append_boot_cmdline.py scripts/446j_apply_dispcc_misc.py scripts/u1_port_legacy_qusb2_phy.py scripts/u1_patch_boot_dtb.py scripts/u2_apply_gki_usb_composite_handover.py scripts/38_repack_a52_p1_boot.py
           # P461: exercise pinned donor transformer before the costly
           # source restore; no actual kernel source needed for this test.
-          python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py
+          python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py scripts/469b_mss_offline_cleanup.py scripts/469b_pstore_driver.py
           python3 scripts/469_pstore_node_match.py --self-test
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
@@ -276,7 +277,7 @@ jobs:
           # Pin the known-working P451 SMMU source before Phase452.
           cp "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c" "$RUNNER_TEMP/P457-PRE-SMMU.c"
           bash -n scripts/452_apply_phase_chain.sh
-          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_wait.py scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py scripts/468_mss_ril_compat_source.py scripts/468_mss_ril_compat_dtb.py scripts/468b_modem_ssr_smem.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py
+          python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_wait.py scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py scripts/468_mss_ril_compat_source.py scripts/468_mss_ril_compat_dtb.py scripts/468b_modem_ssr_smem.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py scripts/469b_mss_offline_cleanup.py scripts/469b_pstore_driver.py
           bash scripts/452_apply_phase_chain.sh
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
@@ -352,6 +353,16 @@ jobs:
             python3 scripts/469_mss_fatal_recovery.py --root "$ROOT" \
               --report phase447-inventory/P469-MSS-FATAL-RECOVERY.json
             python3 scripts/469_mss_fatal_recovery.py --root "$ROOT" --check-only
+            # P469b: stop GLINK and QRTR on second fatal, release PAS,
+            # and enable explicit sysfs state/start with P468 ref reuse.
+            python3 scripts/469b_mss_offline_cleanup.py --root "$ROOT" \
+              --report phase447-inventory/P469B-MSS-OFFLINE-CLEANUP.json
+            python3 scripts/469b_mss_offline_cleanup.py --root "$ROOT" --check-only
+            # P469 RAM built in already; trace initcall registration and
+            # prevent command-line legacy dummy from competing with live OF.
+            python3 scripts/469b_pstore_driver.py --root "$ROOT" \
+              --report phase447-inventory/P469B-PSTORE-INITCALL.json
+            python3 scripts/469b_pstore_driver.py --root "$ROOT" --check-only
             grep -Fxq "CONFIG_MSM_SUBSYSTEM_RESTART=y" "$PWD/workspace/gki-phase199-out/.config" || {
               echo "::error title=P468 TG SSR bus not enabled::required CONFIG_MSM_SUBSYSTEM_RESTART=y"; exit 1;
             }
@@ -980,10 +991,10 @@ jobs:
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P468b modem SSR ownership marker not linked::$marker"; exit 1; }
             done
             echo 'P468b modem-only qcom,force-stop lookup bypass (-ENOENT), no second SMP2P stop owner, REGISTER prints actual major/minor rc=0' >> "$GITHUB_STEP_SUMMARY"
-            for marker in 'P469 MSS CRASHLOOP_STOP fatals=' 'P469 MSS START_BLOCKED state=' 'P469 MSS MANUAL_RESTART retry_offline=1' 'P469 PSTORE NODE_MATCH node=' 'P469 PSTORE NODE_REJECT node='; do
+            for marker in 'P469 MSS CRASHLOOP_STOP fatals=' 'P469 MSS MANUAL_RESTART retry_offline=1' 'P469 PSTORE NODE_MATCH node=' 'P469 PSTORE NODE_REJECT node=' 'P469B MSS STOP_OFFLINE rc=0' 'P469B MSS STOP_FAILED rc=' 'P469B MSS MANUAL_START ref_reuse=1' 'P469B MSS LAST_REF offline_cleanup' 'P469B MSS AUTO_REBOOT_BLOCK offline=1' 'P469B PSTORE INIT register_rc=' 'P469B PSTORE DT_OWNER node='; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P469 mandatory linked Image marker missing::$marker"; exit 1; }
             done
-            echo 'P469 MSS two-fatal/300s stop + manual offline retry without fake ONLINE + OF parent/basename/reg ramoops probe linked' >> "$GITHUB_STEP_SUMMARY"
+            echo 'P469b second fatal triggers real GLINK+PAS stop to OFFLINE, skips only restart, accepts manual state/start with correct refs; ramoops built-in initcall tracer linked' >> "$GITHUB_STEP_SUMMARY"
             echo 'P468 modem subsystem char device + actual remoteproc sysfs state + firmware direct search linked; P467/P466/P463/P462 retained' >> "$GITHUB_STEP_SUMMARY"
           fi
           case "${{ matrix.variant.id }}" in
@@ -1117,9 +1128,9 @@ jobs:
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
               --dtb phase447b-variants/P468-MSS-SUBSYS.dtb \
-              --output phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img \
+              --output phase447b-variants/MANGROVE-P469B-MSS-OFFLINE-PSTORE-NO-IPA.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P469B-MSS-OFFLINE-PSTORE-NO-IPA.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1240,13 +1251,13 @@ jobs:
             phase447b-variants/P453-RAMOOPS-BOOT-AUDIT.txt
           if-no-files-found: error
           compression-level: 0
-      - name: Upload P469 ONE G boot (P468b RIL + ramoops fix + MSS fatal crashloop guard, no IPA)
+      - name: Upload P469b ONE G boot (P469 #598 + GLINK/QRTR shutdown + pstore initcall, no IPA)
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P469-MSS-GUARD-PSTORE-G-${{ github.run_number }}
+          name: MANGROVE-P469B-MSS-OFFLINE-PSTORE-G-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img
+            phase447b-variants/MANGROVE-P469B-MSS-OFFLINE-PSTORE-NO-IPA.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
             phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             phase447-inventory/P465-FASTRPC-MMAP-GUARD.json
@@ -1257,12 +1268,17 @@ jobs:
             phase447-inventory/P468B-MSS-SMEM-OWNERSHIP.json
             phase447-inventory/P469-PSTORE-OF-NODE-MATCH.json
             phase447-inventory/P469-MSS-FATAL-RECOVERY.json
+            phase447-inventory/P469B-MSS-OFFLINE-CLEANUP.json
+            phase447-inventory/P469B-PSTORE-INITCALL.json
             phase447b-variants/P468-MSS-SUBSYS-DTB.json
             phase447b-variants/P468-MSS-SUBSYS.dtb
             scripts/468_mss_ril_compat_source.py
             scripts/468b_modem_ssr_smem.py
             scripts/469_pstore_node_match.py
             scripts/469_mss_fatal_recovery.py
+            scripts/469b_mss_offline_cleanup.py
+            scripts/469b_pstore_driver.py
+            docs/p469b-clean-mss-qrtr-pstore-and-ipa-minimum.md
             docs/p469-pstore-mss-fatal-guard-ipa-minimum.md
             scripts/468_mss_ril_compat_dtb.py
             phase447b-variants/P467-MSS-DTB-MANIFEST.json
