@@ -16,7 +16,7 @@ def get_phandle(path):
     p=cmd("fdtget","-t","x",str(path),MSS,"phandle",check=False)
     return int(p.stdout.strip().split()[0],16) if p.returncode==0 and p.stdout.strip() else None
 def check(path):
-    P467["check"](str(path))
+    P467["check"](path)
     ph=get_phandle(path)
     if not ph:raise RuntimeError("P468 modem rproc parent phandle unavailable")
     dts=cmd("dtc","-q","-I","dtb","-O","dts",str(path)).stdout
@@ -37,7 +37,7 @@ def main():
     with tempfile.TemporaryDirectory() as d:
         f=Path(d)/"P468.dtb"
         f.write_bytes(a.dtb_in.read_bytes())
-        P467["check"](str(f))
+        P467["check"](f)
         old=get_phandle(f)
         if not a.check_only and not old:
             dts=cmd("dtc","-q","-I","dtb","-O","dts",str(f)).stdout
