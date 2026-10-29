@@ -1117,9 +1117,9 @@ jobs:
             # P462 watchdog and all kernel/SCM/PAS image contents intact.
             python3 scripts/461_pack_adsp_sensor_boot.py --boot "$FINAL_G" \
               --dtb phase447b-variants/P468-MSS-SUBSYS.dtb \
-              --output phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img \
+              --output phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img \
               --report phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
-            FINAL_G="phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img"
+            FINAL_G="phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img"
             python3 scripts/461_final_boot_ecc48_gate.py --boot "$FINAL_G" \
               --dtb-out phase447b-variants/P461-FINAL-BOOT-ECC48.dtb \
               --report phase447b-variants/P461-FINAL-BOOT-ECC48-MANIFEST.json \
@@ -1246,7 +1246,7 @@ jobs:
         with:
           name: MANGROVE-P469-MSS-GUARD-PSTORE-G-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P468-MSS-RIL-COMPAT-NO-IPA.boot.img
+            phase447b-variants/MANGROVE-P469-MSS-GUARD-PSTORE-NO-IPA.boot.img
             phase447b-variants/P461-ACTIVE-BOOT-MANIFEST.json
             phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             phase447-inventory/P465-FASTRPC-MMAP-GUARD.json
