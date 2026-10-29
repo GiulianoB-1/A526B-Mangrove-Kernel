@@ -26,6 +26,14 @@ def patch(s):
         raise RuntimeError("P469b pstore already applied")
     if "P461 PSTORE RAMOOPS_PROBE" not in s:
         raise RuntimeError("P461 ramoops probe marker missing")
+    # This file uses OF helpers in the injected dummy-device guard.
+    # The exact restored kernel can differ in existing include ordering.
+    for header in ("#include <linux/of.h>", "#include <linux/of_address.h>"):
+        if header not in s:
+            i = s.find("#include ")
+            if i < 0:
+                raise RuntimeError("P469b pstore: no C include block")
+            s = s[:i] + header + "\n" + s[i:]
     s=once(s,
         "static void __init ramoops_register_dummy(void)\n"
         "{\n"
@@ -61,38 +69,79 @@ def patch(s):
         "\tret = platform_driver_register(&ramoops_driver);\n"
         "\tpr_info(\"P469B PSTORE INIT register_rc=%d\\n\", ret);\n",
         "initcall trace")
-    # The exact restored Mangrove tree may use a different registration
-    # macro for this init function. Require the real init function and its
-    # platform-driver registration, but do not prescribe its initcall level.
-    # P469 #598 proved that ram.o is built into the final Image.
-    for required in ("static int __init ramoops_init(void)",
-                     "platform_driver_register(&ramoops_driver);"):
-        if required not in s:
-            raise RuntimeError("P469b pstore missing real init path: " + required)
+    # The two unique anchors above establish the actual dummy registration
+    # and platform-driver registration in the restored source. No dependency
+    # on a particular init function name or initcall macro is justified.
     return s
 
 
 def check(s):
     for token in ("P469B PSTORE INIT enter", "P469B PSTORE INIT register_rc=",
-                  "P469B PSTORE DT_OWNER", "static int __init ramoops_init(void)",
-                  "P461 PSTORE RAMOOPS_PROBE", 'of_device_is_available(np)',
+                  "P469B PSTORE DT_OWNER", "P461 PSTORE RAMOOPS_PROBE",
+                  "platform_driver_register(&ramoops_driver);",
+                  "#include <linux/of_address.h>", "#include <linux/of.h>",
+                  'of_device_is_available(np)',
                   "resource_size(&res) != 0x00100000"):
         if token not in s:
             raise RuntimeError("P469b pstore missing %s" % token)
     return {"baseline_run":40871537827,"config":"CONFIG_PSTORE_RAM=y already built",
             "driver":"fs/pstore/ram.o built-in",
-            "init":"postcore_initcall(ramoops_init) instrumented",
+            "init":"existing real platform-driver registration instrumented; initcall name not assumed",
             "probe":"P461 instrumentation preserved",
             "legacy_dummy":"skip if the exact available reserved-memory DT region exists",
             "preserve_ecc":48,"duplicate_memory":False}
 
 
+def self_test():
+    # Mimic the two proven 5.10 anchors, with a DIFFERENT init name and
+    # macro so strict name-based checks cannot silently return in the future.
+    sample = """
+#include <linux/platform_device.h>
+static int fake_ramoops_probe(void)
+{
+    /* P461 PSTORE RAMOOPS_PROBE */
+    return 0;
+}
+static void __init ramoops_register_dummy(void)
+{
+\tstruct ramoops_platform_data pdata;
+}
+static int __init a52_custom_ram_init(void)
+{
+\tint ret;
+\tramoops_register_dummy();
+\tret = platform_driver_register(&ramoops_driver);
+\treturn ret;
+}
+late_initcall(a52_custom_ram_init);
+"""
+    result = patch(sample)
+    check(result)
+    assert "#include <linux/of_address.h>" in result
+    assert "#include <linux/of.h>" in result
+    assert "late_initcall(a52_custom_ram_init);" in result
+    assert "P469B PSTORE INIT" in result
+    try:
+        patch(result)
+    except RuntimeError as e:
+        assert "already applied" in str(e)
+    else:
+        raise AssertionError("P469b pstore double patch accepted")
+    print("P469B PSTORE RENAMED-INITCALL SELF-TEST PASS")
+
+
 def main():
     pa=argparse.ArgumentParser()
-    pa.add_argument("--root",type=Path,required=True)
+    pa.add_argument("--root",type=Path)
+    pa.add_argument("--self-test",action="store_true")
     pa.add_argument("--check-only",action="store_true")
     pa.add_argument("--report",type=Path)
     a=pa.parse_args()
+    if a.self_test:
+        self_test()
+        return
+    if a.root is None:
+        pa.error("--root required unless --self-test")
     f=a.root/FILE
     s=f.read_text()
     if not a.check_only:
