@@ -29,6 +29,7 @@ struct p470_mss_notif_work {
     struct work_struct work;
     enum subsys_notif_type type;
     bool crashed;
+    struct device *parent;
 };
 
 void a52_p470_mss_legacy_enter(void)
@@ -60,10 +61,14 @@ static void p470_mss_notif_workfn(struct work_struct *work)
     data.crashed = task->crashed ?
                    CRASH_STATUS_ERR_FATAL : CRASH_STATUS_NO_CRASH;
     data.enable_ramdump = 0;
+    if (task->parent)
+        data.pdev = to_platform_device(task->parent);
     ret = subsys_notif_queue_notification(handle, task->type, &data);
     pr_info("P470 MSS NOTIF event=%d producer=remoteproc rc=%d\n",
             task->type, ret);
 done:
+    if (task->parent)
+        put_device(task->parent);
     kfree(task);
 }
 
@@ -89,9 +94,15 @@ static void p470_mss_queue_notify(struct rproc *rproc,
     }
     task->type = type;
     task->crashed = crashed;
+    task->parent = get_device(rproc->dev.parent);
+    if (!task->parent) {
+        kfree(task);
+        return;
+    }
     INIT_WORK(&task->work, p470_mss_notif_workfn);
     if (!queue_work(p470_mss_notif_wq, &task->work)) {
         dev_err(&rproc->dev, "P470 MSS NOTIF event=%d queue_rejected\n", type);
+        put_device(task->parent);
         kfree(task);
     }
 }
@@ -140,6 +151,7 @@ def modify_core(s):
              "#include <linux/remoteproc.h>\n"
              "#include <linux/sched.h>\n"
              "#include <linux/workqueue.h>\n"
+             "#include <linux/platform_device.h>\n"
              "#include <soc/qcom/subsystem_notif.h>\n"
              "#include <soc/qcom/subsystem_restart.h>",
              "real TG notifier ABI include")
