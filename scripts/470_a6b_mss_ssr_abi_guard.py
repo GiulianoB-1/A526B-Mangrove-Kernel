@@ -206,6 +206,43 @@ def patch_pas(s):
     }
 \treturn 0;'''
     s = once(s, original, replacement, "log stability and register cleanup")
+    # Independent watch on the PAS private context. The register routine
+    # may mutate adsp->dev (the crashing A6 _dev_info call used this value).
+    # Never print via the observed pointer; use the platform device.
+    s = once(s,
+             '        adsp->a52_modem_ssr = subsys_register(ssr);',
+             '''        dev_info(&pdev->dev,
+                 "P470-A6b MSS DEV_CANARY before ok=%d\n",
+                 READ_ONCE(adsp->dev) == &pdev->dev);
+        if (READ_ONCE(adsp->dev) != &pdev->dev) {
+            dev_err(&pdev->dev,
+                    "P470-A6b MSS DEV_CANARY CORRUPTED before registration; restoring, shim disabled\n");
+            WRITE_ONCE(adsp->dev, &pdev->dev);
+            a52_p470_ssr_desc_free(ssr);
+            adsp->a52_modem_ssr_desc = NULL;
+            adsp->a52_modem_ssr = NULL;
+        } else {
+        adsp->a52_modem_ssr = subsys_register(ssr);
+        dev_info(&pdev->dev,
+                 "P470-A6b MSS DEV_CANARY after ok=%d\n",
+                 READ_ONCE(adsp->dev) == &pdev->dev);
+        if (READ_ONCE(adsp->dev) != &pdev->dev) {
+            dev_err(&pdev->dev,
+                    "P470-A6b MSS DEV_CANARY CORRUPTED after subsys_register; unregister/free/restore\n");
+            WRITE_ONCE(adsp->dev, &pdev->dev);
+            if (!IS_ERR_OR_NULL(adsp->a52_modem_ssr))
+                subsys_unregister(adsp->a52_modem_ssr);
+            adsp->a52_modem_ssr = NULL;
+            a52_p470_ssr_desc_free(ssr);
+            adsp->a52_modem_ssr_desc = NULL;
+        } else {''',
+             "canary before/after TG subsys registration")
+    s = once(s,
+             '        } /* ABI-matched descriptor allocation */',
+             '''        } /* stable adsp->dev after SSR registration */
+        } /* stable adsp->dev before SSR registration */
+        } /* ABI-matched descriptor allocation */''',
+             "close both probe canary branches")
 
     old_remove = '''\tif (adsp->a52_modem_ssr) {
 \t\tsubsys_unregister(adsp->a52_modem_ssr);
@@ -247,6 +284,10 @@ def check(root):
         "a52_p470_ssr_desc_alloc(&caller_abi)",
         "a52_p470_ssr_desc_free(adsp->a52_modem_ssr_desc)",
         "dev_info(&pdev->dev,\n              \"P468 MSS SUBSYS REGISTER",
+        "P470-A6b MSS DEV_CANARY before ok=%d",
+        "P470-A6b MSS DEV_CANARY after ok=%d",
+        "P470-A6b MSS DEV_CANARY CORRUPTED before registration",
+        "P470-A6b MSS DEV_CANARY CORRUPTED after subsys_register",
         "P470 MSS WAIT_TIMEOUT modem_not_started",
         "a52_p470_mss_legacy_enter();",
     ):
@@ -264,6 +305,8 @@ def check(root):
         "layout_fields_compared": ["size","name","dev","owner","powerup",
                                    "shutdown","state","force_stop_bit","err_fatal_irq"],
         "mss_probe_log_uses_platform_dev": True,
+        "mss_dev_canary_before_after": True,
+        "canary_corruption_unregister_free_restore": True,
         "pas_preserved_on_abi_mismatch": True,
         "a6_rpmh_bus_preserved": True,
         "hardware_oops_resolved": False,
