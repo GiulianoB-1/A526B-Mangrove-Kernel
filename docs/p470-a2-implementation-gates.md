@@ -19,12 +19,23 @@ no-IPA P469b artifact as an A2 IPA image.
    original SCM and IOMMU code in the !P470_A0_COMPILE_ONLY branch;
    the A2 gate compiles it and fails closed on nonexistent vendor APIs.
    No warning downgrades and no KBUILD_EXTRA_SYMBOLS.
-3. **SMMU first**, not mem_protect_region: map Lagoon AP/WLAN/uC
-   SIDs 0x440/0x441/0x442. Implement genuine S1_BYPASS and FAST/fastmap
-   semantics with verified DT context bank and extra fixed mappings
-   0x146a8000/0x2000 (AP) and 0x1ea0000/0x80000 (WLAN).
-   Do not replace fastmap by an ordinary unmanaged domain or blanket
-   identity mappings. Protect Phase206 system-suspend veto.
+3. **SMMU translated-domain first (TG semantic revision, A2c)**:
+   verified TG ipa_v3/ipa.c uses DOMAIN_ATTR_FAST ONLY for IPADBG.
+   S1_BYPASS is functional, with TG AP/WLAN/uC all bypass=0.
+   Use standard IOMMU_DOMAIN_DMA translation for SID 0x440/0x441/0x442,
+   never an unmanaged domain, blanket identity mode or fake fastmap speedup.
+   IOMMU_RESV_DIRECT must preserve fixed MMIO IOVAs 0x146a8000/0x2000
+   (AP) and 0x1ea0000/0x80000 (WLAN). The TG
+   qcom,iommu-dma-addr-pool ranges are ALLOCATOR-OWNED, not reserved:
+   AP 0x20000000+0x40000000, uC 0x40000000+0x20000000.
+   IOMMU_RESV_RESERVED must cover the COMPLEMENT of each pool across
+   the device IOMMU aperture, including addresses above AP's TG
+   qcom,geometry-mapping cap 0xF0000000 if the physical aperture is
+   wider. ipa3_iommu_map must continue rejecting manual overlaps
+   inside the allocator-owned pools and avoid double-mapping DIRECT.
+   Runtime gate: DMA mappings actually LAND IN POOL, zero SMMU faults.
+   Defer atomic WDI contexts to phase B and FAST performance to
+   throughput-driven tuning. Protect Phase206/P460B veto.
 4. **Single PAS15 owner**: the legacy PIL subsystem
    soc:qcom,ipa_fws, firmware lagoon_ipa_fws, reserved
    0x8b700000+0x10000 and GSI 0x8b710000+0x5400.
@@ -69,9 +80,13 @@ no-IPA P469b artifact as an A2 IPA image.
 ## Current readiness status
 
 - A1 strict post-Image ABI: PASS (#628), but with A0 compile-only gates.
-- A2 un-stubbed source+ABI: running as a new strict CI stage.
+- A2b un-stubbed translated-DMA source+ABI: PASS (#649 @ 367e3dd).
+- A2c allocator-owned pool complement: source committed; new CI pending.
+  No AP/uC DMA runtime IOVA evidence yet.
 - Final built-in linkage: NOT IMPLEMENTED.
-- Real S1_BYPASS/FAST/fastmap: NOT IMPLEMENTED.
+- Translated DMA bypass=0 compatibility: compiled in external-module probe.
+  Actual A2c DMA allocator complement not runtime tested; optional vendor
+  FAST speedup intentionally NOT PORTED.
 - PAS15 legacy PIL driver/node and firmware: NOT IMPLEMENTED.
 - Final DT, SMP2P and 5-path ICC: NOT IMPLEMENTED.
 - MSS lifecycle notifier producer: NOT IMPLEMENTED.
