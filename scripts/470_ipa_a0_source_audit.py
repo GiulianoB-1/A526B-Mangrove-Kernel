@@ -30,8 +30,8 @@ REQUIRED_FILES = [
 ABI_HEADERS = [
     "include/linux/ipa.h",
     "include/linux/msm_gsi.h",
-    "include/linux/rmnet_ipa_fd_ioctl.h",
-    "include/linux/ipa_qmi_service_v01.h",
+    "include/uapi/linux/rmnet_ipa_fd_ioctl.h",
+    "include/uapi/linux/ipa_qmi_service_v01.h",
     "include/uapi/linux/msm_ipa.h",
     "include/uapi/linux/msm_rmnet.h",
     "include/soc/qcom/subsystem_notif.h",
@@ -140,6 +140,7 @@ def audit(root, donor, tg=None):
         "status": "BLOCKED_NOT_FLASHABLE",
         "baseline": {"phase": "P469b", "build": 605,
                      "commit": "19ff2acfc334f42788b645f29b690c33b652d1eb"},
+        "vendor_kernel_header_reference": {"repository": "CodeLinaro-mirror/la_kernel_msm-5.10", "sha": "f438c918a464b82d4a637b5327dd1ed6e8b625dc", "imported": False},
         "donor": {"repository": DONOR_REPO, "sha": DONOR_SHA,
                   "file_count": sum(p.is_file() for p in tree.rglob("*"))},
         "tg_sha": TG_SHA, "hardware_from_workorder": HARDWARE,
