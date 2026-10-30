@@ -109,6 +109,20 @@ def patch(source):
         '\n\t/* P470-A5: do not mistake legacy table parsing for real voting. */\n'
         '\tresult = p470_a5_require_bus_backend(dev);\n'
         '\tif (result)\n\t\treturn result;', 1)
+    # Propagate the actual synchronous device_reprobe error to the sysfs
+    # writer. The one-shot ARM bit intentionally remains latched on failure,
+    # forcing a reboot before any retry; no hidden fallback to P469b mode.
+    old_arm = '''    if (ret)
+        pr_err("P470 IPA ARM reprobe rc=%d (no forced modem boot)\\n", ret);
+    return count;'''
+    new_arm = '''    if (ret) {
+        pr_err("P470 IPA ARM reprobe rc=%d (no forced modem boot)\\n", ret);
+        return ret;
+    }
+    return count;'''
+    if source.count(old_arm) != 1:
+        raise RuntimeError("P470-A5 ARM error reporting anchor changed")
+    source = source.replace(old_arm, new_arm, 1)
     return source
 
 
@@ -119,6 +133,7 @@ def check(root):
               'real_msm_bus_backend=not_ported',
               'return -EOPNOTSUPP;', 'of_find_property(np, "interconnects"',
               'p470_a5_require_bus_backend(dev)',
+              'P470 IPA ARM reprobe rc=%d (no forced modem boot)',
               'of_property_count_u32_elems',
               'get_ipa_dts_pm_info(struct platform_device'):
         if x not in s:
