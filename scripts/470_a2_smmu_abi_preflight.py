@@ -10,7 +10,7 @@ This adapter:
   * requires an attached IOMMU_DOMAIN_DMA (no identity bypass);
   * verifies the exact CB compatible, unmasked stream SID, mode, and pools;
   * verifies kernel-side SID reservation source and all live DIRECT maps;
-  * checks pinned DT reserved pools and every IPA manual map against them;
+  * checks the allocator-owned TG DT pools and rejects manual IPA overlap;
   * recognizes the Linux 5.10 pre-populated DIRECT identity mappings, rather
     than re-mapping a conflicting range;
   * never uses or installs fastmap's page tables, DMA ops or global arm-smmu
@@ -30,7 +30,7 @@ FAST = "iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_FAST, &fast);"
 
 HELPER = r'''
 /* P470_A2_TRANSLATED_LAGOON_CB_V2
- * Check actual Linux 5.10 domain, exact DT SID and installed reservation.
+ * Check actual Linux 5.10 domain, exact DT SID and DIRECT translation.
  * DOMAIN_ATTR_FAST is diagnostic-only in pinned ipa.c. Do not claim the
  * vendor speedup: we are using standard translated IOMMU-DMA (bypass=0).
  */
@@ -39,7 +39,7 @@ static int p470_a2_check_reservations(struct device *dev,
                                      const char *cb)
 {
     phys_addr_t fixed = 0, size = 0, va = 0, vsz = 0;
-    u32 triplet[3], pool[2];
+    u32 triplet[3], pool[2], geom[2];
     unsigned long addr;
     int ret;
 
@@ -85,8 +85,20 @@ static int p470_a2_check_reservations(struct device *dev,
             of_property_count_u32_elems(dev->of_node,
                                          "qcom,iommu-dma-addr-pool") != 2) {
             dev_err(dev,
-                    "P470 IPA SMMU cb=%s invalid reserved IOVA pool DT\n",
+                    "P470 IPA SMMU cb=%s invalid allocator-owned IOVA pool DT\n",
                     cb);
+            return -EINVAL;
+        }
+    }
+
+    if (!strcmp(cb, "ap")) {
+        ret = of_property_read_u32_array(dev->of_node,
+                                          "qcom,geometry-mapping",
+                                          geom, ARRAY_SIZE(geom));
+        if (ret || geom[0] != 0 || geom[1] != 0xF0000000 ||
+            of_property_count_u32_elems(dev->of_node,
+                                         "qcom,geometry-mapping") != 2) {
+            dev_err(dev, "P470 IPA SMMU cb=ap geometry DT mismatch\\n");
             return -EINVAL;
         }
     }
@@ -204,8 +216,11 @@ static int p470_a2_manual_map_guard(struct iommu_domain *domain,
         (iova < domain->geometry.aperture_start ||
          end > domain->geometry.aperture_end))
         return -ERANGE;
+    /* TouchGrass AP qcom,geometry-mapping=[0,0xF0000000). */
+    if (domain == ipa3_get_smmu_domain() && end >= 0xF0000000ULL)
+        return -ERANGE;
     if (cb->va_size && iova < cb->va_end && end >= cb->va_start) {
-        pr_err("P470 IPA SMMU manual-map overlaps reserved DMA IOVA pool\n");
+        pr_err("P470 IPA SMMU manual-map overlaps allocator-owned DMA IOVA pool\n");
         return -ERANGE;
     }
     if (domain == ipa3_get_smmu_domain()) {
@@ -327,7 +342,8 @@ def main():
                "uC": {"sid": "0x442", "tg_mode": "default", "translation": True}},
         "fixed_direct_windows_checked": True,
         "reservation_source_checked_not_exported_to_module": True,
-        "allocator_reservation_runtime_confirmed": False,
+        "allocator_pool_is_available_not_reserved": True,
+        "outside_pool_reservation_runtime_confirmed": False,
         "all_ipa3_iommu_map_calls_guarded": True,
         "atomic_WDI_audit_done": False,
         "built_in": False,
@@ -337,7 +353,7 @@ def main():
     if a.report:
         a.report.parent.mkdir(parents=True, exist_ok=True)
         a.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print("P470-A2b TRANSLATED CB ABI PASS: SID, live DIRECT, DT pools, aperture checked; allocator reservation pending runtime; NO FLASH")
+    print("P470-A2c TRANSLATED CB ABI PASS: SID, DIRECT, allocator-owned pools and AP geometry checked; complement reservation pending runtime; NO FLASH")
 
 
 if __name__ == "__main__":
