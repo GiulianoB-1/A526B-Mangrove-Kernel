@@ -36,6 +36,9 @@ for path in \
   include/linux/ipa_wigig.h \
   include/linux/ipa_usb.h \
   include/linux/ipa_fmwk.h \
+  include/linux/ipa_qdss.h \
+  include/linux/ipa_odu_bridge.h \
+  include/linux/ipa_eth.h \
   include/linux/ipc_logging.h \
   include/linux/mailbox/qmp.h \
   include/uapi/linux/msm_ipa.h \
