@@ -245,6 +245,51 @@ w = w.replace(old_tail, "}\n#endif", 1)
 wigig.write_text(w)
 print("P470 A0 WIGIG 5.10 COMPAT: four debugfs void-return calls")
 
+# Linux 5.10 net_device_ops::ndo_tx_timeout passes a TX queue index.
+# The original diagnostic only examines outstanding total packets, so
+# accept the additional argument without changing timeout behavior.
+rmnet = p / "drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c"
+rm = rmnet.read_text()
+old_timeout = "static void ipa3_wwan_tx_timeout(struct net_device *dev)\n{\n"
+if rm.count(old_timeout) != 1:
+    raise RuntimeError("P470 RMNET timeout callback signature drift")
+rm = rm.replace(old_timeout,
+    "static void ipa3_wwan_tx_timeout(struct net_device *dev, unsigned int txqueue)\n"
+    "{\n"
+    "\t(void)txqueue; /* existing per-device diagnostic, not per-queue */\n", 1)
+
+# The three 5.10 debugfs_create_u32() helpers return void. Keep the
+# actual files and keep fail handling for debugfs_create_file(), whose
+# dentry is still returned. The three dfile_* fields are write-only
+# dangling handle storage and have no readers in the pinned source.
+for field in ("dfile_outstanding_high",
+              "dfile_outstanding_high_ctl",
+              "dfile_outstanding_low"):
+    decl = "\tstruct dentry *" + field + ";\n"
+    if rm.count(decl) != 1:
+        raise RuntimeError(f"P470 RMNET unused debugfs dentry field drift: {field}")
+    rm = rm.replace(decl, "", 1)
+u32_re = re.compile(
+    r"(?m)^\tdbgfs->(?P<field>dfile_outstanding_(?:high_ctl|high|low))\s*="
+    r"\s*(?P<call>debugfs_create_u32\([^;]+\));\n"
+    r"\tif \(!dbgfs->(?P=field) \|\|\n"
+    r"\t\tIS_ERR\(dbgfs->(?P=field)\)\) \{\n"
+    r"\t\tpr_err\(\"failed to create file for [^\"\n]+\\n\"\);\n"
+    r"\t\tgoto fail;\n"
+    r"\t\}\n",
+)
+matched = []
+def fix_rmnet_debugfs(m):
+    matched.append(m.group("field"))
+    return "\t" + m.group("call") + ";\n"
+rm = u32_re.sub(fix_rmnet_debugfs, rm)
+if sorted(matched) != sorted(("dfile_outstanding_high",
+                             "dfile_outstanding_high_ctl",
+                             "dfile_outstanding_low")):
+    raise RuntimeError(f"P470 RMNET debugfs site drift: {matched!r}")
+rmnet.write_text(rm)
+print("P470 A0 RMNET 5.10 COMPAT: ndo_tx_timeout queue argument + three debugfs void APIs")
+
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
 
