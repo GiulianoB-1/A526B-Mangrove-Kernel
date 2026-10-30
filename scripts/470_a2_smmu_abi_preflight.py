@@ -64,7 +64,7 @@ static int p470_a2_check_reservations(struct device *dev,
                     fixed + size - 1 > domain->geometry.aperture_end)) ||
          (vsz && (va < domain->geometry.aperture_start ||
                   va + vsz - 1 > domain->geometry.aperture_end)))) {
-        dev_err(dev, "P470 IPA SMMU cb=%s fixed/pool range outside DMA aperture\\n", cb);
+        dev_err(dev, "P470 IPA SMMU cb=%s fixed/pool range outside DMA aperture\n", cb);
         return -ERANGE;
     }
 
@@ -80,14 +80,14 @@ static int p470_a2_check_reservations(struct device *dev,
     iommu_put_resv_regions(dev, &regions);
     if ((!direct && size) || (!pool && vsz)) {
         dev_err(dev,
-                "P470 IPA SMMU cb=%s incomplete DIRECT/RESERVED IOVA policy\\n", cb);
+                "P470 IPA SMMU cb=%s incomplete DIRECT/RESERVED IOVA policy\n", cb);
         return -ENODEV;
     }
     if (size &&
         (iommu_iova_to_phys(domain, fixed) != fixed ||
          iommu_iova_to_phys(domain, fixed + size - PAGE_SIZE) !=
                       fixed + size - PAGE_SIZE)) {
-        dev_err(dev, "P470 IPA SMMU cb=%s DIRECT identity window not installed\\n",
+        dev_err(dev, "P470 IPA SMMU cb=%s DIRECT identity window not installed\n",
                 cb);
         return -EIO;
     }
@@ -123,7 +123,7 @@ static int p470_a2_get_s1_bypass(struct device *dev,
            ? 0 : -EINVAL;
     of_node_put(args.np);
     if (ret) {
-        dev_err(dev, "P470 IPA SMMU cb=%s SID/mask DT mismatch expected=0x%x\\n",
+        dev_err(dev, "P470 IPA SMMU cb=%s SID/mask DT mismatch expected=0x%x\n",
                 cb, sid);
         return ret;
     }
@@ -138,7 +138,7 @@ static int p470_a2_get_s1_bypass(struct device *dev,
 
     if (domain->type != IOMMU_DOMAIN_DMA ||
         iommu_get_domain_for_dev(dev) != domain) {
-        dev_err(dev, "P470 IPA SMMU cb=%s no attached translated DMA domain\\n",
+        dev_err(dev, "P470 IPA SMMU cb=%s no attached translated DMA domain\n",
                 cb);
         return -EOPNOTSUPP;
     }
@@ -146,7 +146,7 @@ static int p470_a2_get_s1_bypass(struct device *dev,
     if (ret)
         return ret;
     *bypass = 0;
-    dev_info(dev, "P470 IPA SMMU cb=%s sid=0x%03x mode=translated(tg=%s) bypass=0\\n",
+    dev_info(dev, "P470 IPA SMMU cb=%s sid=0x%03x mode=translated(tg=%s) bypass=0\n",
              cb, sid, expected ? expected : "default");
     return 0;
 }
@@ -183,7 +183,7 @@ static int p470_a2_manual_map_guard(struct iommu_domain *domain,
          end > domain->geometry.aperture_end))
         return -ERANGE;
     if (cb->va_size && iova < cb->va_end && end >= cb->va_start) {
-        pr_err("P470 IPA SMMU manual-map overlaps reserved DMA IOVA pool\\n");
+        pr_err("P470 IPA SMMU manual-map overlaps reserved DMA IOVA pool\n");
         return -ERANGE;
     }
     if (domain == ipa3_get_smmu_domain()) {
