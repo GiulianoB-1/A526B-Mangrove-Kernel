@@ -103,7 +103,8 @@ jobs:
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
-          python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py
+          python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
+          python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -372,6 +373,12 @@ jobs:
             python3 scripts/470_a2_real_scm.py --root "$ROOT" \
               --report phase447-inventory/P470-A2-REAL-SCM.json
             python3 scripts/470_a2_real_scm.py --root "$ROOT" --check-only
+            # P470-A2b: SID-scoped IOMMU_RESV_DIRECT for IPA fixed MMIO
+            # and IOMMU_RESV_RESERVED for the TG IPA manual IOVA pools.
+            # No FAST page table, SMMU default-domain override, S2CR or suspend changes.
+            python3 scripts/470_a2_lagoon_iommu_reservations.py --root "$ROOT" \
+              --report phase447-inventory/P470-A2B-IPA-IOMMU-RESERVATIONS.json
+            python3 scripts/470_a2_lagoon_iommu_reservations.py --root "$ROOT" --check-only
             # P469 RAM built in already; trace initcall registration and
             # prevent command-line legacy dummy from competing with live OF.
             python3 scripts/469b_pstore_driver.py --root "$ROOT" \
@@ -1251,11 +1258,14 @@ jobs:
             phase447-inventory/P470-A1-STRICT-MODPOST.log
             phase447-inventory/P470-A2-REAL-SCM.json
             phase447-inventory/P470-A2-IOMMU-ABI-PREFLIGHT.json
+            phase447-inventory/P470-A2B-IPA-IOMMU-RESERVATIONS.json
             phase447-inventory/P470-A2-REAL-ABI-MODPOST.log
             phase447-inventory/P470-A2-REAL-ABI-ERRORS.txt
             phase447-inventory/P470-A2-FLASHABILITY-GATES.json
             scripts/470_a2_flashability_gate.py
             scripts/470_a2_unstubbed_modpost.sh
+            scripts/470_a2_lagoon_iommu_reservations.py
+            scripts/470_a2_smmu_abi_preflight.py
             vendor/p470/ipa_fmwk.c
             scripts/470_a1_strict_modpost.sh
             scripts/470_a1_lagoon_hardware_gate.py
