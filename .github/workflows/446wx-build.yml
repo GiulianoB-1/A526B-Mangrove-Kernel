@@ -103,6 +103,7 @@ jobs:
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
+          python3 -m py_compile scripts/470_a2_flashability_gate.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -959,6 +960,20 @@ jobs:
             "$PWD/workspace/p470-vendor-kernel-headers" \
             "$PWD/phase447-inventory"
           echo "P470-A2 unstubbed strict compilation PASS; not built-in, not hardware-ready" >> "$GITHUB_STEP_SUMMARY"
+      - name: P470-A2 report actual flash blockers even if module ABI fails
+        if: always() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/470_a2_flashability_gate.py \
+            --root "$PWD/gki/common" --build "$PWD/workspace/gki-phase199-out" \
+            --report phase447-inventory/P470-A2-FLASHABILITY-GATES.json
+      - name: P470-A2 enforce built-in/DT/PAS/SMMU/SSR flashability policy
+        if: matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/470_a2_flashability_gate.py \
+            --root "$PWD/gki/common" --build "$PWD/workspace/gki-phase199-out" \
+            --report phase447-inventory/P470-A2-FLASHABILITY-GATES.json --enforce
       - name: Preserve Phase446AF vmlinux for crash decoding
         if: success()
         run: |
@@ -1228,6 +1243,8 @@ jobs:
             phase447-inventory/P470-A1-STRICT-MODPOST.log
             phase447-inventory/P470-A2-REAL-ABI-MODPOST.log
             phase447-inventory/P470-A2-REAL-ABI-ERRORS.txt
+            phase447-inventory/P470-A2-FLASHABILITY-GATES.json
+            scripts/470_a2_flashability_gate.py
             scripts/470_a2_unstubbed_modpost.sh
             vendor/p470/ipa_fmwk.c
             scripts/470_a1_strict_modpost.sh
