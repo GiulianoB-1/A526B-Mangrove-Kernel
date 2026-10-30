@@ -23,7 +23,6 @@ REQUIRED_FILES = [
     "ipa/ipa_v3/ipa_pm.c", "ipa/ipa_v3/ipa_qmi_service.c",
     "ipa/ipa_v3/ipa_qmi_service_v01.c",
     "ipa/ipa_v3/rmnet_ipa.c", "ipa/ipa_v3/rmnet_ipa_fd_ioctl.c",
-    "ipa/ipa_v3/ipa_api.c",
 ]
 # Headers included by the true vendor 5.10 implementation. Some may be
 # provided through the existing TG/SSR ports; the audit checks the *actual*
@@ -145,6 +144,7 @@ def audit(root, donor, tg=None):
                   "file_count": sum(p.is_file() for p in tree.rglob("*"))},
         "tg_sha": TG_SHA, "hardware_from_workorder": HARDWARE,
         "missing_donor_files": missing_files, "missing_gki_abi_headers": missing_abi,
+        "external_required_not_in_module": ["ipa_api.c (upstream core/kernel interface or TG equivalent)"],
         "rmnet_missing_symbols": absent_rmnet, "rmnet_real_endpoint_mapping": real_ep_mapping,
         "ipa_v4_7_token_present": hw47_in_donor, "ipa_qmi_source_present": qmi_present,
         "legacy_ssr_interface_usable": ssr_api_in_root,
