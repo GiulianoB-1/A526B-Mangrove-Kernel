@@ -135,7 +135,7 @@ def patch_pas(s, root):
     if not tg_header.is_file():
         raise RuntimeError("A6b TG SSR header missing at " + str(tg_header))
     s = once(s, '#include <soc/qcom/subsystem_restart.h>',
-             '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h>\n'
+             '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"\n'
              '#include <linux/a52_mss_ssr_abi.h>', "PAS TG SSR canonical ABI include")
     s = once(s, '\tstruct subsys_desc a52_modem_ssr_desc;',
              '\tstruct subsys_desc *a52_modem_ssr_desc;',
