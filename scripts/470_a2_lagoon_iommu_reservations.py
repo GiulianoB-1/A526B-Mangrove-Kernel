@@ -74,12 +74,14 @@ static bool p470_a2_ipa_reserve_complement(struct device *dev,
     }
     lo = domain->geometry.aperture_start;
     hi = domain->geometry.aperture_end;
-    if (ap_limit_exclusive)
-        hi = min_t(u64, hi, ap_limit_exclusive - 1);
-
+    /* Keep the *full* hardware aperture for the upper reservation.
+     * AP geometry-mapping is a tighter policy cap, not a reason to leave
+     * the IOVAs above 0xF0000000 available with a 64-bit DMA mask.
+     */
     pool_end = pool_start + pool_size;
     if (!pool_size || pool_end <= pool_start ||
-        pool_start < lo || pool_end - 1 > hi) {
+        pool_start < lo || pool_end - 1 > hi ||
+        (ap_limit_exclusive && pool_end > ap_limit_exclusive)) {
         dev_err(dev,
                 "P470 IPA SMMU cb=%s invalid pool/aperture [%llx,%llx] pool=%llx+%llx\n",
                 cb, lo, hi, pool_start, pool_size);
@@ -88,6 +90,7 @@ static bool p470_a2_ipa_reserve_complement(struct device *dev,
 
     /* Reservation of [lo, pool_start) and [pool_end, hi] (inclusive).
      * The first byte of the pool and its last byte are NEVER reserved.
+ * AP's full 64-bit aperture above geometry_end is RESERVED too.
      */
     if (lo < pool_start &&
         !p470_a2_ipa_append_resv(dev, head, lo, pool_start - lo,
@@ -208,10 +211,9 @@ static void p470_a2_lagoon_ipa_resv(struct device *dev,
 
 def complement(lo, hi, start, size, cap=None):
     """Reference model using inclusive IOVA aperture endpoints."""
-    if cap is not None:
-        hi = min(hi, cap - 1)
     end = start + size
-    if not size or lo > start or end - 1 > hi:
+    if not size or lo > start or end - 1 > hi or (
+            cap is not None and end > cap):
         raise ValueError("pool outside translated aperture")
     return ([(lo, start - 1)] if lo < start else []) + (
         [(end, hi)] if end <= hi else [])
@@ -231,7 +233,7 @@ def check(s):
     for token in (TAG, "IOMMU_RESV_DIRECT", "IOMMU_RESV_RESERVED",
                   "p470_a2_ipa_reserve_complement(dev, head, cb, domain,",
                   "pool_start - lo", "hi - pool_end + 1",
-                  "pool_end <= hi", "ap_limit_exclusive - 1",
+                  "pool_end <= hi", "pool_end > ap_limit_exclusive",
                   "0x146a8000", "0x01ea0000",
                   "pool_start = 0x20000000ULL",
                   "pool_start = 0x40000000ULL",
@@ -249,9 +251,11 @@ def check(s):
 
 
 def self_test():
-    assert complement(0, 0xffffffffffffffff, 0x20000000, 0x40000000,
+    assert complement(0, 0xefffffff, 0x20000000, 0x40000000,
                       0xF0000000) == [
         (0, 0x1fffffff), (0x60000000, 0xefffffff)]
+    assert complement(0, 0xffffffffffffffff, 0x20000000, 0x40000000,
+                      0xF0000000)[1][1] == 0xffffffffffffffff
     assert complement(0, 0xffffffff, 0x40000000, 0x20000000) == [
         (0, 0x3fffffff), (0x60000000, 0xffffffff)]
     assert complement(0x20000000, 0x5fffffff, 0x20000000, 0x40000000) == []
@@ -305,8 +309,9 @@ def main():
                 "ap": ["0x20000000", "0x40000000"],
                 "uc": ["0x40000000", "0x20000000"]},
             "reserved_complements": {
-                "ap": [["0x0", "0x1fffffff"],
-                       ["0x60000000", "0xefffffff"]],
+                "ap": [["aperture_start", "0x1fffffff"],
+                       ["0x60000000", "domain_aperture_end"]],
+                "ap_above_0xF0000000": "also reserved if actual IOMMU aperture is wider",
                 "uc": "runtime IOMMU aperture minus [0x40000000,0x5fffffff]"},
             "ap_geometry_end_exclusive": "0xF0000000",
             "runtime_acceptance_required": [
