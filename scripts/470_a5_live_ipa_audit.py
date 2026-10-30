@@ -111,9 +111,18 @@ def audit(blob):
     for kind in ("ipa_in", "ipa_out"):
         test(len(nodes[kind]) == 1 and nodes[kind][0].startswith(nodes["ipa"][0] + "/")
              if nodes["ipa"] else False, kind + " under IPA parent")
-    test(any(path.startswith("/soc/") and "apps-smmu@15000000" in path
-             and "qcom,skip-init" in props
-             for path, props in tree.items()), "apps-smmu@15000000 skip-init retained")
+    smmu_nodes = [(path, props) for path, props in tree.items()
+                  if path.endswith("/apps-smmu@15000000")]
+    test(len(smmu_nodes) == 1 and "qcom,skip-init" in smmu_nodes[0][1],
+         "apps-smmu@15000000 skip-init retained")
+    if len(smmu_nodes) == 1:
+        path = smmu_nodes[0][0]
+        tbus = [(n, p) for n, p in tree.items()
+                if n.startswith(path + "/") and
+                n.count("/") == path.count("/") + 1 and
+                "qcom,qsmmuv500-tbu" in strings(p, "compatible")]
+        test(len(tbus) == 7 and all(active(p) for _, p in tbus),
+             "seven active qsmmuv500 TBU children")
     reserved = [(path, p) for path, p in tree.items()
                 if path.startswith("/reserved-memory/")]
     def reserved_reg(address, size):
