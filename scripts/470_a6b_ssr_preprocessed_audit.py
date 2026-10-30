@@ -47,11 +47,16 @@ def main():
     raw = {name: extract(path) for name, path in roots.items()}
     hashes = {name: hashlib.sha256(val.encode()).hexdigest()
               for name, val in raw.items()}
-    all_same = len(set(hashes.values())) == 1
+    baseline_equal = hashes["p469b_pas"] == hashes["p469b_ssr"]
+    a6_equal = hashes["a6_pas"] == hashes["a6_ssr"]
+    repaired_equal = hashes["a6b_pas"] == hashes["a6b_ssr"]
     out = {
         "phase": "P470-A6b-TG-SSR-ABI-PREPROCESS-COMPARE",
         "preprocessed_struct_hashes": hashes,
-        "all_four_struct_declarations_match": all_same,
+        "all_six_struct_declarations_match": len(set(hashes.values())) == 1,
+        "p469b_original_abi_mismatch": not baseline_equal,
+        "a6_678_original_abi_mismatch": not a6_equal,
+        "a6b_abi_repaired": repaired_equal,
         "p469b_pas_equals_ssr": hashes["p469b_pas"] == hashes["p469b_ssr"],
         "a6_pas_equals_ssr": hashes["a6_pas"] == hashes["a6_ssr"],
         "a6_vs_a6b_pas_same": hashes["a6_pas"] == hashes["a6b_pas"],
@@ -62,16 +67,18 @@ def main():
         "p469b_vs_a6_original_desc_changed": hashes["p469b_pas"] != hashes["a6_pas"],
         "sizeof_proved_by_preprocess": False,
         "runtime_size_offset_check_embedded": True,
-        "safety_status": "FAIL_CLOSED" if not all_same else "DECLARATIONS_EQUAL_RUNTIME_SIZE_CHECK_PENDING",
+        "safety_status": ("A6B_REPAIRED_RUNTIME_SIZE_CHECK_PENDING" if repaired_equal else
+                          "A6B_PAS_SSR_MISMATCH_FAIL_CLOSED"),
         "hardware_oops_resolved": False,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
-    print("P470-A6b ABI PREPROCESS comparison all_equal=" + str(all_same))
+    print("P470-A6b ABI PREPROCESS original_P469B_equal=" + str(baseline_equal) +
+          " original_A6_equal=" + str(a6_equal) + " A6b_repaired_equal=" + str(repaired_equal))
     for key, digest in hashes.items():
         print(f"P470-A6b ABI PREPROCESS {key} SHA256={digest}")
-    if not all_same:
-        raise SystemExit("P470-A6b ABI mismatch: preprocessed struct changes across PAS/SSR or builds")
+    if not repaired_equal:
+        raise SystemExit("P470-A6b ABI mismatch: TG PAS/SSR must match AFTER header repair")
 
 if __name__ == "__main__":
     main()
