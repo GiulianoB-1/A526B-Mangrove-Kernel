@@ -124,6 +124,79 @@ t = t.replace(old, new)
 trace.write_text(t)
 print("P470 A0 TRACE 5.10 COMPAT: " + new)
 
+# P470 A0 compatibility is compile-only. Production needs actual Qualcomm
+# SCM and SMMU implementations. Never invent a successful secure-world call
+# or identity-map the modem's SMMU streams to get a green compiler result.
+ipa = p / "drivers/platform/msm/ipa/ipa_v3/ipa.c"
+c = ipa.read_text()
+def exact(old, new, n=1):
+    global c
+    count = c.count(old)
+    if count != n:
+        raise RuntimeError(f"P470 A0 ipa.c API drift: {old!r} count={count} expected={n}")
+    c = c.replace(old, new)
+
+# Fixed vendor-array bug: compare the allocated first element, not the
+# compile-time array object address.
+exact("ipa3_ctx->ipa3_active_clients_logging.log_buffer == NULL",
+      "ipa3_ctx->ipa3_active_clients_logging.log_buffer[0] == NULL")
+
+# Vendor UAPI header of this Qualcomm kernel branch has no feature query.
+# Do not invent an ioctl number that would collide with userspace.
+exact("case IPA_IOC_GET_HW_FEATURE_SUPPORT:",
+      "#if defined(IPA_IOC_GET_HW_FEATURE_SUPPORT) && defined(ETH_BRIDGING_SUPPORT)\n"
+      "\tcase IPA_IOC_GET_HW_FEATURE_SUPPORT:")
+exact("\t\tbreak;\n\tdefault:\n\t\tIPA_ACTIVE_CLIENTS_DEC_SIMPLE();",
+      "\t\tbreak;\n#endif /* optional extension missing from pinned UAPI */\n"
+      "\tdefault:\n\t\tIPA_ACTIVE_CLIENTS_DEC_SIMPLE();")
+
+# Linux 5.10's DMA_BIT_MASK(64) macro expands a non-selected 1ULL << 64
+# branch that Clang diagnoses as shift-count-overflow. ~0ULL is its exact
+# 64-bit result; this does not change device DMA-mapping permissions.
+exact("DMA_BIT_MASK(64)", "~0ULL", n=6)
+
+# If secure-world operations are unavailable, explicitly fail them closed.
+# These are compile-only donor transformations, not implementations.
+exact("ret = qcom_scm_mem_protect_region_id(\n"
+      "\t\t\tvirt_to_phys((void *)ipa_tz_unlock_vec),\n"
+      "\t\t\tsize);",
+      "#if defined(P470_A0_COMPILE_ONLY)\n"
+      "\tIPAERR(\"P470 A0 SCM BLOCKED: region protection unavailable\\n\");\n"
+      "\tret = -EOPNOTSUPP;\n"
+      "#else\n"
+      "\tret = qcom_scm_mem_protect_region_id(\n"
+      "\t\t\tvirt_to_phys((void *)ipa_tz_unlock_vec),\n"
+      "\t\t\tsize);\n"
+      "#endif")
+exact("ret = qcom_scm_get_sec_dump_state(&dump_state);",
+      "#if defined(P470_A0_COMPILE_ONLY)\n"
+      "\t/* Never enable secure dumps without a real SCM confirmation. */\n"
+      "\tdump_state = 0;\n"
+      "\tret = -EOPNOTSUPP;\n"
+      "#else\n"
+      "\tret = qcom_scm_get_sec_dump_state(&dump_state);\n"
+      "#endif")
+
+# Qualcomm's S1_BYPASS/FAST domain attributes are vendor-only. A generic
+# iommu_domain must NOT be assumed to be equivalent. Abort the CB probe
+# until real armsmmu attributes + fastmap handling have been ported.
+both = ("\tiommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);\n"
+        "\tiommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_FAST, &fast);")
+blocked = ("#if defined(P470_A0_COMPILE_ONLY)\n"
+           "\tIPAERR(\"P470 A0 SMMU BLOCKED: missing vendor bypass/fast attributes\\n\");\n"
+           "\treturn -EOPNOTSUPP;\n"
+           "#else\n" + both + "\n#endif")
+exact(both, blocked, n=3)
+single = "\tiommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);"
+exact(single, ("#if defined(P470_A0_COMPILE_ONLY)\n"
+               "\tIPAERR(\"P470 A0 11AD SMMU BLOCKED: missing bypass attribute\\n\");\n"
+               "\treturn -EOPNOTSUPP;\n"
+               "#else\n" + single + "\n#endif"), n=4)
+
+ipa.write_text(c)
+print("P470 A0 IPA CORE COMPILE COMPAT: allocation check, optional UAPI, 64-bit DMA mask")
+print("P470 A0 HARD BLOCK: SCM protection/dump and SMMU CB fast/bypass not implemented")
+
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
 
@@ -143,6 +216,6 @@ make -C "$ROOT" O="$BUILD" ARCH=arm64 \
   LLVM=1 LLVM_IAS=1 \
   M="$DONOR" \
   CONFIG_GSI=m CONFIG_IPA3=m CONFIG_RMNET_IPA3=y \
-  KCFLAGS="-DCONFIG_IPA3 -I$HEADERS/include -I$HEADERS/include/uapi -include $DONOR/config/dataipa.h" \
+  KCFLAGS="-DP470_A0_COMPILE_ONLY=1 -DCONFIG_IPA3 -I$HEADERS/include -I$HEADERS/include/uapi -include $DONOR/config/dataipa.h" \
   -j"$(nproc)" modules
 echo "P470 A0 MODULE SOURCE COMPILE PASS (NOT A HARDWARE/IPA READY PASS)"
