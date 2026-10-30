@@ -34,7 +34,7 @@ def patch_public(s):
         "extern int qcom_scm_mem_protect_region_id(phys_addr_t paddr, size_t size);\n"
         + sig, "public CONFIG_QCOM_SCM=y declarations")
     # Preserve -ENODEV if SCM itself is not compiled in; never claim success.
-    fall = "static inline int qcom_scm_mem_protect_video_var(u32 cp_start,"
+    fall = "extern inline int qcom_scm_mem_protect_video_var(u32 cp_start,"
     s = once(s, fall,
         "static inline int qcom_scm_get_sec_dump_state(u32 *dump_state)\n"
         "{ return -ENODEV; }\n"
