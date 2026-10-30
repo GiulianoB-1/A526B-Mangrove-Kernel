@@ -29,14 +29,25 @@ grep -Fq 'qcom_scm_mem_protect_region_id(' "$DONOR/drivers/platform/msm/ipa/ipa_
 grep -Fq 'qcom_scm_get_sec_dump_state(' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
 # TouchGrass uses FAST only for IPADBG, whereas bypass controls behavior.
 # Bind the exact AP/WLAN/uC SIDs to translated DMA, verify SID-scoped DIRECT
-# fixed windows and RESERVED IOVA pools, guard every manual ipa3_iommu_map.
+# fixed windows and reserved COMPLEMENTS of the allocator-owned pools;
+# guard every manual ipa3_iommu_map.
 # No FAST page table, DMA speedup, or actual built-in IPA in this ABI probe.
 python3 scripts/470_a2_smmu_abi_preflight.py --donor "$DONOR" \
     --report "$REPORT/P470-A2-IOMMU-ABI-PREFLIGHT.json" 2>&1 | tee -a "$LOG"
 grep -Fq 'P470_A2_TRANSLATED_LAGOON_CB_V2' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
 grep -Fq 'p470_a2_manual_map_guard' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
 grep -Fq 'mode=translated(tg=%s) bypass=0' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
-grep -Fq 'P470_A2_LAGOON_IPA_SID_RESV_V1' "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu.c"
+# A2c superseded the old SID_RESV_V1 contract. Never reject the new,
+# allocator-correct source because a stale marker is absent.
+SMMU_SRC="$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu.c"
+if ! grep -Fq 'P470_A2_LAGOON_IPA_DMA_POOL_COMPLEMENT_V2' "$SMMU_SRC"; then
+  echo 'P470-A2 REFUSE: A2c SID-scoped DMA pool complement source is missing; NO FLASH' | tee -a "$LOG" >&2
+  exit 1
+fi
+# Validate exact AP/WLAN/uC SIDs and DIRECT windows, and prove the pool
+# itself is NOT registered as IOMMU_RESV_RESERVED. Fail closed on drift.
+python3 scripts/470_a2_lagoon_iommu_reservations.py \
+    --root "$ROOT" --check-only 2>&1 | tee -a "$LOG"
 unset KBUILD_MODPOST_WARN KBUILD_MODPOST_NOFINAL KBUILD_MODPOST_NOERROR KBUILD_EXTRA_SYMBOLS
 echo 'P470-A2 UNSTUBBED START: NO P470_A0_COMPILE_ONLY; genuine SCM and SMMU compilation is mandatory' | tee -a "$LOG"
 # A1 produced .o files with P470_A0_COMPILE_ONLY. Drop every cached donor
@@ -71,4 +82,4 @@ for mod in "$DONOR/drivers/platform/msm/ipa/ipam.ko" \
            "$DONOR/drivers/platform/msm/ipa_fmwk/ipa_fmwk.ko"; do
   test -s "$mod" || { echo "P470-A2 REFUSE: missing real module $mod" | tee -a "$LOG"; exit 1; }
 done
-echo 'P470-A2b UNSTUBBED ABI PASS: real SCM, translated AP/WLAN/uC ABI, direct MMIO/reserved IOVA guarded; FAST speedup NOT PORTED; no runtime/DT/PAS15 proof; NO FLASH' | tee -a "$LOG"
+echo 'P470-A2b UNSTUBBED ABI PASS: real SCM, translated AP/WLAN/uC ABI, DIRECT MMIO and outside-DMA-pool complement guarded; FAST speedup NOT PORTED; no runtime/DT/PAS15 proof; NO FLASH' | tee -a "$LOG"
