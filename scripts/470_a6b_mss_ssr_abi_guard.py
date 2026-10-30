@@ -114,10 +114,10 @@ def patch_ssr(s):
     if TAG in s:
         raise RuntimeError("A6b SSR already patched")
     s = once(s, '#include <soc/qcom/subsystem_restart.h>',
-             '#include <soc/qcom/subsystem_restart.h>\n'
+             '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"\n'
              '#include <linux/a52_mss_ssr_abi.h>\n'
              '#include <linux/err.h>\n'
-             '#include <linux/slab.h>', "SSR provider includes")
+             '#include <linux/slab.h>', "SSR canonical TG header and ABI includes")
     s = once(s, 'struct subsys_device *subsys_register(struct subsys_desc *desc)',
              HELPER + '\nstruct subsys_device *subsys_register(struct subsys_desc *desc)',
              "SSR provider allocation before registration")
@@ -287,6 +287,11 @@ def check(root):
     for token in tokens:
         if token not in ssr:
             raise RuntimeError("A6b SSR missing " + token)
+    canonical_include = '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"'
+    if canonical_include not in pas or canonical_include not in ssr:
+        raise RuntimeError("A6b PAS and SSR must both include EXACT TG legacy header")
+    if '#include <soc/qcom/subsystem_restart.h>' in pas or '#include <soc/qcom/subsystem_restart.h>' in ssr:
+        raise RuntimeError("A6b GKI/TG SSR header ambiguity remains")
     if "struct subsys_desc a52_modem_ssr_desc;" in pas:
         raise RuntimeError("A6b still embeds downstream descriptor in qcom_adsp")
     for token in (
