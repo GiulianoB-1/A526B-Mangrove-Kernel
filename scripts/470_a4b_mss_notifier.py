@@ -28,6 +28,7 @@ static struct workqueue_struct *p470_mss_notif_wq;
 struct p470_mss_notif_work {
     struct work_struct work;
     enum subsys_notif_type type;
+    bool crashed;
 };
 
 void a52_p470_mss_legacy_enter(void)
@@ -56,8 +57,8 @@ static void p470_mss_notif_workfn(struct work_struct *work)
                task->type);
         goto done;
     }
-    data.crashed = task->type == SUBSYS_AFTER_SHUTDOWN ?
-                   CRASH_STATUS_ERR_FATAL : CRASH_STATUS_NONE;
+    data.crashed = task->crashed ?
+                   CRASH_STATUS_ERR_FATAL : CRASH_STATUS_NO_CRASH;
     data.enable_ramdump = 0;
     ret = subsys_notif_queue_notification(handle, task->type, &data);
     pr_info("P470 MSS NOTIF event=%d producer=remoteproc rc=%d\n",
@@ -67,7 +68,8 @@ done:
 }
 
 static void p470_mss_queue_notify(struct rproc *rproc,
-                                  enum subsys_notif_type type)
+                                  enum subsys_notif_type type,
+                                  bool crashed)
 {
     struct p470_mss_notif_work *task;
 
@@ -86,6 +88,7 @@ static void p470_mss_queue_notify(struct rproc *rproc,
         return;
     }
     task->type = type;
+    task->crashed = crashed;
     INIT_WORK(&task->work, p470_mss_notif_workfn);
     if (!queue_work(p470_mss_notif_wq, &task->work)) {
         dev_err(&rproc->dev, "P470 MSS NOTIF event=%d queue_rejected\n", type);
@@ -153,46 +156,20 @@ def modify_core(s):
                           "static int rproc_attach(")
     fragment = once(fragment, "\trproc->state = RPROC_RUNNING;",
                     "\trproc->state = RPROC_RUNNING;\n"
-                    "\tp470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP);",
+                    "\tp470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP, false);",
                     "actual RUNNING notification")
     s = s[:a] + fragment + s[b:]
     a, b, fragment = body(s, "static int rproc_stop(struct rproc *rproc,",
                           "int rproc_trigger_recovery(")
     fragment = once(fragment, "\trproc_stop_subdevices(rproc, crashed);",
-                    "\tp470_mss_queue_notify(rproc, SUBSYS_BEFORE_SHUTDOWN);\n"
+                    "\tp470_mss_queue_notify(rproc, SUBSYS_BEFORE_SHUTDOWN, crashed);\n"
                     "\trproc_stop_subdevices(rproc, crashed);",
                     "actual remoteproc stop")
     fragment = once(fragment, "\trproc->state = RPROC_OFFLINE;",
                     "\trproc->state = RPROC_OFFLINE;\n"
-                    "\tp470_mss_queue_notify(rproc, SUBSYS_AFTER_SHUTDOWN);",
+                    "\tp470_mss_queue_notify(rproc, SUBSYS_AFTER_SHUTDOWN, crashed);",
                     "actual OFFLINE notification")
     s = s[:a] + fragment + s[b:]
-    return s
-
-
-def modify_pas(s):
-    if "P470 MSS IPA_WAIT" not in s or "P469B MSS AUTO_REBOOT_BLOCK" not in s:
-        raise RuntimeError("P470-A4b notifier requires compiled P470-A4 modem wait")
-    s = once(s, "#include <linux/a52_ipa_arm.h>",
-             "#include <linux/a52_ipa_arm.h>\n"
-             "#include <linux/a52_p470_mss_notif.h>",
-             "PAS notifier API")
-    a, b, frag = body(s,
-                      "static int a52_modem_subsys_powerup(const struct subsys_desc *desc)",
-                      "static int a52_modem_subsys_shutdown(")
-    anchor = "    ret = rproc_boot(adsp->rproc);"
-    frag = once(frag, anchor,
-                "    /* P468's notifier owns the legacy start events. */\n"
-                "    a52_p470_mss_legacy_enter();\n"
-                + anchor + "\n"
-                "    a52_p470_mss_legacy_exit();",
-                "no duplicate automatic opener notifications")
-    s = s[:a] + frag + s[b:]
-    a, b, frag = body(s,
-                      "static int a52_modem_subsys_shutdown(const struct subsys_desc *desc",
-                      "static ")
-    # Above stop boundary is the next following static function, not the
-    # signature's own "static"; use a narrow unique statement replacement.
     return s
 
 
@@ -243,7 +220,7 @@ def check(root):
                   "P470 MSS WAIT_TIMEOUT modem_not_started"):
         if token not in pas:
             raise RuntimeError("P470-A4b PAS wrapper notifier missing " + token)
-    if core.count("p470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP);") != 1:
+    if core.count("p470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP, false);") != 1:
         raise RuntimeError("P470-A4b duplicate SSR ready producer")
     if pas.count("a52_p470_mss_legacy_enter();") != 2:
         raise RuntimeError("P470-A4b need exactly two legacy callback scopes")
