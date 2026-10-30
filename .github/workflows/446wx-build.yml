@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P469b MSS clean GLINK-QRTR shutdown and ramoops initcall trace, exact P469 598
+run-name: P470-A0 real IPA source and ABI audit, boot intentionally P469b 605 (IPA OFF)
 on:
   push:
     branches:
@@ -15,6 +15,7 @@ on:
       - agent/p468b-modem-smem-ownership-p468-594
       - agent/p469-mss-fatal-guard-pstore-p468b-596
       - agent/p469b-mss-offline-pstore-audit-from-598
+      - agent/p470-ipa-a0-source-dependency-audit-from-p469b-605
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -96,6 +97,8 @@ jobs:
           python3 -m py_compile scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py scripts/469b_mss_offline_cleanup.py scripts/469b_pstore_driver.py
           python3 scripts/469_pstore_node_match.py --self-test
           python3 scripts/469b_pstore_driver.py --self-test
+          python3 -m py_compile scripts/470_ipa_a0_source_audit.py
+          python3 scripts/470_ipa_a0_source_audit.py --self-test
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -364,6 +367,19 @@ jobs:
             python3 scripts/469b_pstore_driver.py --root "$ROOT" \
               --report phase447-inventory/P469B-PSTORE-INITCALL.json
             python3 scripts/469b_pstore_driver.py --root "$ROOT" --check-only
+            # P470 SOURCE-ONLY stage: pinned LAHAINA/HOLI 5.10 vendor dataipa.
+            # NO CONFIG_IPA3, CONFIG_GSI, device-tree or modem policy change.
+            # This does not manufacture a flashable A0 image.
+            DONOR="$PWD/workspace/p470-dataipa-donor"
+            git clone --quiet --depth=1 --single-branch \
+              --branch LA.UM.10.9.1.r1 \
+              https://github.com/CodeLinaro-mirror/la_platform_vendor_opensource_dataipa.git "$DONOR"
+            test "$(git -C "$DONOR" rev-parse HEAD)" = c560cc3c2840fb0ebc55ceef5b27549c66143637
+            python3 scripts/470_ipa_a0_source_audit.py \
+              --root "$ROOT" --donor "$DONOR" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P470-A0-IPA-SOURCE-DEPENDENCY-AUDIT.json
+            echo 'P470 A0 audit only: source ABI inventory generated, IPA3/GSI NOT enabled, no modem changes' >> "$GITHUB_STEP_SUMMARY"
             # Fail-closed P469b triage: inspect the REAL restored source after patching.
             # The previous runs compiled ram.o but its init marker was not linked.
             echo 'P469B RAMOOPS SOURCE INIT TAIL BEGIN'
@@ -1157,6 +1173,16 @@ jobs:
               | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
             echo 'P467 MSS MANUAL G BOOT: ADSP sensors + MSS PAS4 RMTFS UIO, IPA/CDSP/ICNSS off; hardware unverified' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Upload P470 A0 source audit (NOT a flashable IPA build)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A0-IPA-SOURCE-AUDIT-${{ github.run_number }}
+          path: |
+            phase447-inventory/P470-A0-IPA-SOURCE-DEPENDENCY-AUDIT.json
+            scripts/470_ipa_a0_source_audit.py
+          if-no-files-found: warn
+          compression-level: 6
       - name: Upload Phase446i GKI failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
