@@ -39,7 +39,7 @@ static void p470_a2_reserve_ipa_region(struct device *dev,
     region = iommu_alloc_resv_region(base, size, prot, type);
     if (!region) {
         /* IPA CB must subsequently refuse probe when reservations absent. */
-        dev_err(dev, "P470 IPA SMMU reservation allocation failed base=%pa size=%zu\\n",
+        dev_err(dev, "P470 IPA SMMU reservation allocation failed base=%pa size=%zu\n",
                 &base, size);
         return;
     }
@@ -72,7 +72,7 @@ static void p470_a2_lagoon_ipa_resv(struct device *dev,
 
     fw = dev_iommu_fwspec_get(dev);
     if (!fw || fw->num_ids != 1) {
-        dev_err(dev, "P470 IPA SMMU cb=%s invalid fwspec; reserving nothing\\n",
+        dev_err(dev, "P470 IPA SMMU cb=%s invalid fwspec; reserving nothing\n",
                 cb);
         return;
     }
@@ -80,7 +80,7 @@ static void p470_a2_lagoon_ipa_resv(struct device *dev,
     mask = FIELD_GET(ARM_SMMU_SMR_MASK, fw->ids[0]);
     if (sid != expected || mask) {
         dev_err(dev,
-                "P470 IPA SMMU cb=%s SID mismatch sid=0x%x mask=0x%x expected=0x%x\\n",
+                "P470 IPA SMMU cb=%s SID mismatch sid=0x%x mask=0x%x expected=0x%x\n",
                 cb, sid, mask, expected);
         return;
     }
@@ -97,7 +97,7 @@ static void p470_a2_lagoon_ipa_resv(struct device *dev,
         p470_a2_reserve_ipa_region(dev, head, 0x40000000, 0x20000000,
                                    IOMMU_RESV_RESERVED);
     }
-    dev_info(dev, "P470 IPA SMMU cb=%s sid=0x%03x reservations submitted\\n",
+    dev_info(dev, "P470 IPA SMMU cb=%s sid=0x%03x reservations submitted\n",
              cb, sid);
 }
 
