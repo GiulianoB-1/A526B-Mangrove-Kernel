@@ -103,7 +103,7 @@ jobs:
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
-          python3 -m py_compile scripts/470_a2_flashability_gate.py
+          python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -367,6 +367,11 @@ jobs:
             python3 scripts/469b_mss_offline_cleanup.py --root "$ROOT" \
               --report phase447-inventory/P469B-MSS-OFFLINE-CLEANUP.json
             python3 scripts/469b_mss_offline_cleanup.py --root "$ROOT" --check-only
+            # P470-A2: real upstream Qualcomm 5.10 SCM services (UTIL+MP).
+            # Built in; no fake return, new PAS owner, or Kconfig/DT changes.
+            python3 scripts/470_a2_real_scm.py --root "$ROOT" \
+              --report phase447-inventory/P470-A2-REAL-SCM.json
+            python3 scripts/470_a2_real_scm.py --root "$ROOT" --check-only
             # P469 RAM built in already; trace initcall registration and
             # prevent command-line legacy dummy from competing with live OF.
             python3 scripts/469b_pstore_driver.py --root "$ROOT" \
@@ -1241,6 +1246,7 @@ jobs:
             phase447-inventory/P470-A1-HARDWARE-GATES.json
             phase447-inventory/P470-A0-UNDEFINED-SYMBOLS.txt
             phase447-inventory/P470-A1-STRICT-MODPOST.log
+            phase447-inventory/P470-A2-REAL-SCM.json
             phase447-inventory/P470-A2-REAL-ABI-MODPOST.log
             phase447-inventory/P470-A2-REAL-ABI-ERRORS.txt
             phase447-inventory/P470-A2-FLASHABILITY-GATES.json
