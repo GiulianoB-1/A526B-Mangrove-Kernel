@@ -26,6 +26,44 @@ def patch(s):
         raise RuntimeError("P469b pstore already applied")
     if "P461 PSTORE RAMOOPS_PROBE" not in s:
         raise RuntimeError("P461 ramoops probe marker missing")
+    # The P82 direct A52 console occupies 0xB1B40000+0x40000, inside
+    # the live 0xB1B00000+0x100000 ramoops area. Enabling both would
+    # permit two independent persistent writers to corrupt each other.
+    if "#define A52_DIAG_CONSOLE_PHYS 0xB1B40000ULL" not in s:
+        raise RuntimeError("P469b unexpected A52 early diagnostic address")
+    if "static int __init __maybe_unused ramoops_init(void)" not in s:
+        raise RuntimeError("P469b expected intentionally disabled ramoops_init")
+    if "/* A52 diagnostic build owns the console quarter directly. */" not in s:
+        raise RuntimeError("P469b missing P82 diagnostic ownership comment")
+    if "postcore_initcall(ramoops_init);" in s:
+        raise RuntimeError("P469b refuses duplicate ramoops initcall")
+    s=once(s,
+        "int __init a52_persistent_diag_init(void)\n"
+        "{\n"
+        "\tstruct persistent_ram_ecc_info ecc = { };\n"
+        "\tint prz_ret;\n",
+        "int __init a52_persistent_diag_init(void)\n"
+        "{\n"
+        "\tstruct persistent_ram_ecc_info ecc = { };\n"
+        "\tint prz_ret;\n"
+        "\t/* P469B PSTORE EARLY_DIAG_DISABLED: A52's 256KiB console\n"
+        "\t * is inside ramoops' 1MiB; do not map/clear/write it.\n"
+        "\t * Kernel main.c calls this early, before ramoops initcall.\n"
+        "\t */\n"
+        "\tpr_info(\"P469B PSTORE EARLY_DIAG_DISABLED overlap=0xb1b40000+0x40000\\n\");\n"
+        "\treturn 0;\n",
+        "disable overlapping early A52 writer")
+    s=once(s,
+        "static int __init __maybe_unused ramoops_init(void)\n",
+        "static int __init ramoops_init(void)\n",
+        "restore normal ramoops init function")
+    s=once(s,
+        "/* A52 diagnostic build owns the console quarter directly. */\n",
+        "/* P469B PSTORE: ramoops owns 0xB1B00000+1MiB exclusively.\n"
+        " * A52 early breadcrumb allocations are disabled in P469b.\n"
+        " */\n"
+        "postcore_initcall(ramoops_init);\n",
+        "register ramoops driver initcall")
     # This file uses OF helpers in the injected dummy-device guard.
     # The exact restored kernel can differ in existing include ordering.
     for header in ("#include <linux/of.h>", "#include <linux/of_address.h>"):
@@ -79,6 +117,8 @@ def check(s):
     for token in ("P469B PSTORE INIT enter", "P469B PSTORE INIT register_rc=",
                   "P469B PSTORE DT_OWNER", "P461 PSTORE RAMOOPS_PROBE",
                   "platform_driver_register(&ramoops_driver);",
+                  "postcore_initcall(ramoops_init);",
+                  "P469B PSTORE EARLY_DIAG_DISABLED",
                   "#include <linux/of_address.h>", "#include <linux/of.h>",
                   'of_device_is_available(np)',
                   "resource_size(&res) != 0x00100000"):
@@ -86,15 +126,16 @@ def check(s):
             raise RuntimeError("P469b pstore missing %s" % token)
     return {"baseline_run":40871537827,"config":"CONFIG_PSTORE_RAM=y already built",
             "driver":"fs/pstore/ram.o built-in",
-            "init":"existing real platform-driver registration instrumented; initcall name not assumed",
+            "init":"postcore_initcall restored; phase82 overlapping A52 writer disabled",
             "probe":"P461 instrumentation preserved",
             "legacy_dummy":"skip if the exact available reserved-memory DT region exists",
-            "preserve_ecc":48,"duplicate_memory":False}
+            "preserve_ecc":48,"duplicate_memory":False,
+            "exclusive_ram":"0xB1B00000+0x100000",
+            "legacy_early_diag":"0xB1B40000+0x40000 disabled for G"}
 
 
 def self_test():
-    # Mimic the two proven 5.10 anchors, with a DIFFERENT init name and
-    # macro so strict name-based checks cannot silently return in the future.
+    # Mimic the restored P82 A52 diagnostic ownership, not upstream 5.10.
     sample = """
 #include <linux/platform_device.h>
 static int fake_ramoops_probe(void)
@@ -102,32 +143,40 @@ static int fake_ramoops_probe(void)
     /* P461 PSTORE RAMOOPS_PROBE */
     return 0;
 }
+#define A52_DIAG_CONSOLE_PHYS 0xB1B40000ULL
+int __init a52_persistent_diag_init(void)
+{
+\tstruct persistent_ram_ecc_info ecc = { };
+\tint prz_ret;
+\treturn prz_ret;
+}
 static void __init ramoops_register_dummy(void)
 {
 \tstruct ramoops_platform_data pdata;
 }
-static int __init a52_custom_ram_init(void)
+static int __init __maybe_unused ramoops_init(void)
 {
 \tint ret;
 \tramoops_register_dummy();
 \tret = platform_driver_register(&ramoops_driver);
 \treturn ret;
 }
-late_initcall(a52_custom_ram_init);
+/* A52 diagnostic build owns the console quarter directly. */
 """
     result = patch(sample)
     check(result)
+    assert result.count("postcore_initcall(ramoops_init);") == 1
+    assert "P469B PSTORE EARLY_DIAG_DISABLED" in result
+    assert "static int __init __maybe_unused ramoops_init" not in result
     assert "#include <linux/of_address.h>" in result
     assert "#include <linux/of.h>" in result
-    assert "late_initcall(a52_custom_ram_init);" in result
-    assert "P469B PSTORE INIT" in result
     try:
         patch(result)
     except RuntimeError as e:
         assert "already applied" in str(e)
     else:
-        raise AssertionError("P469b pstore double patch accepted")
-    print("P469B PSTORE RENAMED-INITCALL SELF-TEST PASS")
+        raise AssertionError("P469b duplicate pstore patch accepted")
+    print("P469B PSTORE EXCLUSIVE-OWNER INITCALL SELF-TEST PASS")
 
 
 def main():
