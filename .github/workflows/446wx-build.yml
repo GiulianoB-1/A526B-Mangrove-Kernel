@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A0 external-module compile probe of real GSI/IPA3/rmnet; NO flashable IPA image
+run-name: P470-A1 strict linked-kernel IPA ABI + Lagoon PAS/SMMU/SSR gates; NO FLASH
 on:
   push:
     branches:
@@ -17,6 +17,7 @@ on:
       - agent/p469b-mss-offline-pstore-audit-from-598
       - agent/p470-ipa-a0-source-dependency-audit-from-p469b-605
       - agent/p470a0-ipa-real-compile-probe-no-flash
+      - agent/p470a1-ipa-firmware-smmu-abi-closure-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
