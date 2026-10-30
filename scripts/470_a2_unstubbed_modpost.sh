@@ -64,7 +64,7 @@ if grep -Eq 'Symbol info of vmlinux is missing|Unresolved symbol check will be e
   exit 1
 fi
 for mod in "$DONOR/drivers/platform/msm/ipa/ipam.ko" \
-           "$DONOR/drivers/platform/msm/gsi/gsi.ko" \
+           "$DONOR/drivers/platform/msm/gsi/gsim.ko" \
            "$DONOR/drivers/platform/msm/ipa_fmwk/ipa_fmwk.ko"; do
   test -s "$mod" || { echo "P470-A2 REFUSE: missing real module $mod" | tee -a "$LOG"; exit 1; }
 done
