@@ -23,7 +23,6 @@ HELPER = r'''
 static struct msm_bus_scale_pdata *p470_a6_bus_pdata;
 static u32 p470_a6_bus_handle;
 static bool p470_a6_bus_legacy;
-static atomic_t p470_a6_vote_failed = ATOMIC_INIT(0);
 
 static bool p470_a6_legacy_dt(struct device_node *np)
 {
@@ -170,6 +169,12 @@ def patch(s):
         raise RuntimeError("P470-A6 already installed")
     if "P470_A5_LEGACY_BUS_NO_SILENT_VOTE_V1" not in s:
         raise RuntimeError("P470-A6 requires A5 early-bus prearm verification")
+    # A4's readiness waiter is earlier in the translation unit than the
+    # A5 probe helper. Define the failure latch before that waiter.
+    s = once(s, "static struct device *p470_a4_deferred;",
+             "static struct device *p470_a4_deferred;\n"
+             "static atomic_t p470_a6_vote_failed = ATOMIC_INIT(0);",
+             "bus failure latch before MSS readiness waiter")
     s = once(s, "#include <linux/interconnect.h>",
              "#include <linux/interconnect.h>\n#include <linux/msm-bus.h>",
              "real TG bus API include")
