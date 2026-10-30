@@ -27,13 +27,16 @@ test "$(git -C "$DONOR" rev-parse HEAD)" = c560cc3c2840fb0ebc55ceef5b27549c66143
 # compile the corresponding unguarded branches, not silently accept stubs.
 grep -Fq 'qcom_scm_mem_protect_region_id(' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
 grep -Fq 'qcom_scm_get_sec_dump_state(' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
-# Replace the seven ABI-incompatible vendor get_attr calls with an accurate,
-# fail-closed GKI domain-type query. A Lagoon "fastmap" DT request remains
-# unsupported and MUST fail on hardware: this is a no-flash ABI discovery step.
+# TouchGrass uses FAST only for IPADBG, whereas bypass controls behavior.
+# Bind the exact AP/WLAN/uC SIDs to translated DMA, verify SID-scoped DIRECT
+# fixed windows and RESERVED IOVA pools, guard every manual ipa3_iommu_map.
+# No FAST page table, DMA speedup, or actual built-in IPA in this ABI probe.
 python3 scripts/470_a2_smmu_abi_preflight.py --donor "$DONOR" \
     --report "$REPORT/P470-A2-IOMMU-ABI-PREFLIGHT.json" 2>&1 | tee -a "$LOG"
-grep -Fq 'P470_A2_IOMMU_UNSUPPORTED_FASTMAP_V1' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
-grep -Fq 'return -EOPNOTSUPP;' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
+grep -Fq 'P470_A2_TRANSLATED_LAGOON_CB_V2' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
+grep -Fq 'p470_a2_manual_map_guard' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
+grep -Fq 'mode=translated(tg=%s) bypass=0' "$DONOR/drivers/platform/msm/ipa/ipa_v3/ipa.c"
+grep -Fq 'P470_A2_LAGOON_IPA_SID_RESV_V1' "$ROOT/drivers/iommu/arm/arm-smmu/arm-smmu.c"
 unset KBUILD_MODPOST_WARN KBUILD_MODPOST_NOFINAL KBUILD_MODPOST_NOERROR KBUILD_EXTRA_SYMBOLS
 echo 'P470-A2 UNSTUBBED START: NO P470_A0_COMPILE_ONLY; genuine SCM and SMMU compilation is mandatory' | tee -a "$LOG"
 # A1 produced .o files with P470_A0_COMPILE_ONLY. Drop every cached donor
@@ -68,4 +71,4 @@ for mod in "$DONOR/drivers/platform/msm/ipa/ipam.ko" \
            "$DONOR/drivers/platform/msm/ipa_fmwk/ipa_fmwk.ko"; do
   test -s "$mod" || { echo "P470-A2 REFUSE: missing real module $mod" | tee -a "$LOG"; exit 1; }
 done
-echo 'P470-A2 UNSTUBBED ABI PASS: real SCM, truthful translated DMA, vendor fastmap REFUSED; NOT hardware-ready; NO FLASH' | tee -a "$LOG"
+echo 'P470-A2b UNSTUBBED ABI PASS: real SCM, translated AP/WLAN/uC ABI, direct MMIO/reserved IOVA guarded; FAST speedup NOT PORTED; no runtime/DT/PAS15 proof; NO FLASH' | tee -a "$LOG"
