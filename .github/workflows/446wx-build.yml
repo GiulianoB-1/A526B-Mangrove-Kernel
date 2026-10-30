@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A2 unstubbed IPA/SCM/SMMU strict preflight; NO FLASH
+run-name: P470-A3 native built-in IPA/GSI/RMNET link preflight; NO FLASH
 on:
   push:
     branches:
@@ -19,6 +19,7 @@ on:
       - agent/p470a0-ipa-real-compile-probe-no-flash
       - agent/p470a1-ipa-firmware-smmu-abi-closure-no-flash
       - agent/p470a2-ipa-hardware-gates-no-flash
+      - agent/p470a3-builtin-ipa-link-probe-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -105,6 +106,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
+          python3 -m py_compile scripts/470_a3_stage_builtin.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1536,4 +1538,86 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
-
+      # A3 runs only AFTER the complete, known-good P469b boot artifact has
+      # been packaged and uploaded. This changes the composed build tree and
+      # .config, but no resulting A3 kernel, DTB, or boot.img is shipped.
+      - name: P470-A3 native built-in IPA/GSI/RMNET Image link probe (NO FLASH)
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          ROOT="$PWD/gki/common"
+          BUILD="$PWD/workspace/gki-phase199-out"
+          LOG="$PWD/phase447-inventory/P470-A3-BUILTIN-LINK.log"
+          REPORT="$PWD/phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json"
+          ORIGINAL_BOOT="$PWD/phase447b-variants/MANGROVE-P469B-MSS-OFFLINE-PSTORE-NO-IPA.boot.img"
+          test -s "$ORIGINAL_BOOT"
+          sha256sum "$ORIGINAL_BOOT" > "$RUNNER_TEMP/p470-a3-original-boot.sha256"
+          test -s "$BUILD/vmlinux"
+          test -s "$BUILD/arch/arm64/boot/Image"
+          test -s "$BUILD/Module.symvers"
+          python3 scripts/470_a3_stage_builtin.py \
+            --root "$ROOT" \
+            --donor "$PWD/workspace/p470-dataipa-donor" \
+            --headers "$PWD/workspace/p470-vendor-kernel-headers" \
+            --framework "$PWD/vendor/p470/ipa_fmwk.c" \
+            --features "$PWD/scripts/470_a1_lagoon_dataipa_config.h" \
+            --report "$REPORT"
+          "$ROOT/scripts/config" --file "$BUILD/.config" \
+            --enable GSI --enable IPA3 --enable RMNET_IPA3
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 olddefconfig
+          for flag in CONFIG_GSI=y CONFIG_IPA3=y CONFIG_RMNET_IPA3=y; do
+            grep -Fxq "$flag" "$BUILD/.config" || {
+              echo "::error title=P470-A3 Kconfig rejected requested built-in driver::$flag"
+              exit 1
+            }
+          done
+          # Must compile and link the *native* Image. A1/A2 external .ko
+          # success is not adequate evidence for this phase.
+          echo 'P470-A3 compiling full in-tree IPA/GSI/RMNET + real framework' | tee "$LOG"
+          set +e
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image 2>&1 | tee -a "$LOG"
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "P470-A3 native built-in link FAILED rc=$RC; NO FLASH" | tee -a "$LOG"
+            exit "$RC"
+          fi
+          for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping; do
+            grep -Eq "[[:space:]]$symbol$" "$BUILD/System.map" || {
+              echo "::error title=P470-A3 real built-in provider not linked::$symbol"
+              exit 1
+            }
+          done
+          grep -aFq 'mode=translated(tg=%s) bypass=0' "$BUILD/arch/arm64/boot/Image"
+          sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
+          python3 scripts/470_a2_flashability_gate.py \
+            --root "$ROOT" --build "$BUILD" \
+            --report phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json")
+          r = json.loads(p.read_text())
+          r["status"] = "BUILTIN_LINK_PASS_RUNTIME_BLOCKED"
+          r["compiled_gki_image"] = True
+          r["flashable"] = False
+          p.write_text(json.dumps(r, indent=2, sort_keys=True) + "\n")
+          PY
+          echo 'P470-A3 built-in native Image link PASS, but PAS15/DTB/SSR/modem-ready NOT READY; NO FLASH' | tee -a "$LOG"
+          echo 'P470-A3 native built-in Image link PASS. This is not a boot artifact and is not flashable.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload P470-A3 native built-in link diagnostics (NO IMAGE)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A3-BUILTIN-NO-FLASH-${{ github.run_number }}
+          path: |
+            phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
+            phase447-inventory/P470-A3-BUILTIN-LINK.log
+            phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
+            scripts/470_a3_stage_builtin.py
+          if-no-files-found: warn
+          compression-level: 6
