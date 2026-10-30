@@ -9,8 +9,8 @@ mapping performance/atomicity hints, NOT distinct translations.
 This adapter:
   * requires an attached IOMMU_DOMAIN_DMA (no identity bypass);
   * verifies the exact CB compatible, unmasked stream SID, mode, and pools;
-  * verifies the SID-scoped IOMMU_RESV_DIRECT/RESERVED regions are installed;
-  * checks every ipa3_iommu_map against aperture and the entire CB pool;
+  * verifies kernel-side SID reservation source and all live DIRECT maps;
+  * checks pinned DT reserved pools and every IPA manual map against them;
   * recognizes the Linux 5.10 pre-populated DIRECT identity mappings, rather
     than re-mapping a conflicting range;
   * never uses or installs fastmap's page tables, DMA ops or global arm-smmu
@@ -38,10 +38,10 @@ static int p470_a2_check_reservations(struct device *dev,
                                      struct iommu_domain *domain,
                                      const char *cb)
 {
-    struct iommu_resv_region *reg;
-    bool direct = false, pool = false;
     phys_addr_t fixed = 0, size = 0, va = 0, vsz = 0;
-    LIST_HEAD(regions);
+    u32 triplet[3], pool[2];
+    unsigned long addr;
+    int ret;
 
     if (!strcmp(cb, "ap")) {
         fixed = 0x146a8000;
@@ -57,6 +57,40 @@ static int p470_a2_check_reservations(struct device *dev,
     } else {
         return -EOPNOTSUPP;
     }
+
+    /* Only built-in arm-smmu get_resv_regions owns DIRECT/RESERVED lists.
+     * The getter and putter are NOT exported to external IPA modules.
+     * Check the live DT contract and actual DIRECT translations instead.
+     * Allocator reservation still requires a built-in/hardware audit.
+     */
+    if (size) {
+        ret = of_property_read_u32_array(dev->of_node,
+                                          "qcom,additional-mapping",
+                                          triplet, ARRAY_SIZE(triplet));
+        if (ret || triplet[0] != fixed || triplet[1] != fixed ||
+            triplet[2] != size ||
+            of_property_count_u32_elems(dev->of_node,
+                                         "qcom,additional-mapping") != 3) {
+            dev_err(dev,
+                    "P470 IPA SMMU cb=%s invalid DIRECT MMIO DT mapping\n",
+                    cb);
+            return -EINVAL;
+        }
+    }
+    if (vsz) {
+        ret = of_property_read_u32_array(dev->of_node,
+                                          "qcom,iommu-dma-addr-pool",
+                                          pool, ARRAY_SIZE(pool));
+        if (ret || pool[0] != va || pool[1] != vsz ||
+            of_property_count_u32_elems(dev->of_node,
+                                         "qcom,iommu-dma-addr-pool") != 2) {
+            dev_err(dev,
+                    "P470 IPA SMMU cb=%s invalid reserved IOVA pool DT\n",
+                    cb);
+            return -EINVAL;
+        }
+    }
+
     if (!domain->geometry.aperture_end)
         return -ERANGE;
     if (domain->geometry.force_aperture &&
@@ -68,28 +102,16 @@ static int p470_a2_check_reservations(struct device *dev,
         return -ERANGE;
     }
 
-    iommu_get_resv_regions(dev, &regions);
-    list_for_each_entry(reg, &regions, list) {
-        if (size && reg->type == IOMMU_RESV_DIRECT &&
-            reg->start == fixed && reg->length == size)
-            direct = true;
-        if (vsz && reg->type == IOMMU_RESV_RESERVED &&
-            reg->start == va && reg->length == vsz)
-            pool = true;
-    }
-    iommu_put_resv_regions(dev, &regions);
-    if ((!direct && size) || (!pool && vsz)) {
-        dev_err(dev,
-                "P470 IPA SMMU cb=%s incomplete DIRECT/RESERVED IOVA policy\n", cb);
-        return -ENODEV;
-    }
-    if (size &&
-        (iommu_iova_to_phys(domain, fixed) != fixed ||
-         iommu_iova_to_phys(domain, fixed + size - PAGE_SIZE) !=
-                      fixed + size - PAGE_SIZE)) {
-        dev_err(dev, "P470 IPA SMMU cb=%s DIRECT identity window not installed\n",
-                cb);
-        return -EIO;
+    /* IOMMU_RESV_DIRECT is normally installed before IPA CB probe.
+     * Check the entire MMIO window, not just the first and last page.
+     */
+    for (addr = fixed; addr < fixed + size; addr += PAGE_SIZE) {
+        if (iommu_iova_to_phys(domain, addr) != addr) {
+            dev_err(dev,
+                    "P470 IPA SMMU cb=%s DIRECT MMIO IOVA 0x%lx missing\n",
+                    cb, addr);
+            return -EIO;
+        }
     }
     return 0;
 }
@@ -263,7 +285,7 @@ def patch(src):
 
 
 def check(src):
-    for token in (MARKER, "iommu_get_resv_regions(dev, &regions)",
+    for token in (MARKER, "of_property_count_u32_elems(dev->of_node",
                   "IOMMU_RESV_DIRECT", "IOMMU_RESV_RESERVED",
                   "mode=translated(tg=%s) bypass=0",
                   "p470_a2_manual_map_guard(domain, cb, iova, paddr, size)",
@@ -272,6 +294,9 @@ def check(src):
                   "IOMMU_DOMAIN_DMA"):
         if token not in src:
             raise RuntimeError("P470-A2b IPA mandatory translated guard missing: " + token)
+    if ("iommu_get_resv_regions(dev, &regions);" in src or
+            "iommu_put_resv_regions(dev, &regions);" in src):
+        raise RuntimeError("P470-A2b nonexported IOMMU reservation helpers survive")
     if "DOMAIN_ATTR_S1_BYPASS, &bypass" in src or "DOMAIN_ATTR_FAST, &fast" in src:
         raise RuntimeError("P470-A2b raw vendor domain attr call survived")
 
@@ -301,6 +326,8 @@ def main():
                "WLAN": {"sid": "0x441", "tg_mode": "atomic", "translation": True},
                "uC": {"sid": "0x442", "tg_mode": "default", "translation": True}},
         "fixed_direct_windows_checked": True,
+        "reservation_source_checked_not_exported_to_module": True,
+        "allocator_reservation_runtime_confirmed": False,
         "all_ipa3_iommu_map_calls_guarded": True,
         "atomic_WDI_audit_done": False,
         "built_in": False,
@@ -310,7 +337,7 @@ def main():
     if a.report:
         a.report.parent.mkdir(parents=True, exist_ok=True)
         a.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print("P470-A2b TRANSLATED CB ABI PASS: SID, DIRECT, pool, aperture guard; NO FLASH")
+    print("P470-A2b TRANSLATED CB ABI PASS: SID, live DIRECT, DT pools, aperture checked; allocator reservation pending runtime; NO FLASH")
 
 
 if __name__ == "__main__":
