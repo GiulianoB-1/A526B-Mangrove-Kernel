@@ -30,6 +30,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--baseline-pas", type=Path, required=True)
     p.add_argument("--baseline-ssr", type=Path, required=True)
+    p.add_argument("--a6-pas", type=Path, required=True)
+    p.add_argument("--a6-ssr", type=Path, required=True)
     p.add_argument("--a6b-pas", type=Path, required=True)
     p.add_argument("--a6b-ssr", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
@@ -37,6 +39,8 @@ def main():
     roots = {
         "p469b_pas": args.baseline_pas,
         "p469b_ssr": args.baseline_ssr,
+        "a6_pas": args.a6_pas,
+        "a6_ssr": args.a6_ssr,
         "a6b_pas": args.a6b_pas,
         "a6b_ssr": args.a6b_ssr,
     }
@@ -49,9 +53,13 @@ def main():
         "preprocessed_struct_hashes": hashes,
         "all_four_struct_declarations_match": all_same,
         "p469b_pas_equals_ssr": hashes["p469b_pas"] == hashes["p469b_ssr"],
+        "a6_pas_equals_ssr": hashes["a6_pas"] == hashes["a6_ssr"],
+        "a6_vs_a6b_pas_same": hashes["a6_pas"] == hashes["a6b_pas"],
+        "a6_vs_a6b_ssr_same": hashes["a6_ssr"] == hashes["a6b_ssr"],
         "a6b_pas_equals_ssr": hashes["a6b_pas"] == hashes["a6b_ssr"],
         "a6b_equals_p469b": hashes["p469b_pas"] == hashes["a6b_pas"],
         "p469b_vs_a6b_desc_layout_changed": hashes["p469b_pas"] != hashes["a6b_pas"],
+        "p469b_vs_a6_original_desc_changed": hashes["p469b_pas"] != hashes["a6_pas"],
         "sizeof_proved_by_preprocess": False,
         "runtime_size_offset_check_embedded": True,
         "safety_status": "FAIL_CLOSED" if not all_same else "DECLARATIONS_EQUAL_RUNTIME_SIZE_CHECK_PENDING",
