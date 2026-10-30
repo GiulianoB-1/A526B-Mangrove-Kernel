@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A1 strict linked-kernel IPA ABI + Lagoon PAS/SMMU/SSR gates; NO FLASH
+run-name: P470-A2 unstubbed IPA/SCM/SMMU strict preflight; NO FLASH
 on:
   push:
     branches:
@@ -18,6 +18,7 @@ on:
       - agent/p470-ipa-a0-source-dependency-audit-from-p469b-605
       - agent/p470a0-ipa-real-compile-probe-no-flash
       - agent/p470a1-ipa-firmware-smmu-abi-closure-no-flash
+      - agent/p470a2-ipa-hardware-gates-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -101,7 +102,7 @@ jobs:
           python3 scripts/469b_pstore_driver.py --self-test
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
-          bash -n scripts/470_compile_real_dataipa_module_probe.sh
+          bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -948,6 +949,16 @@ jobs:
             "$PWD/workspace/p470-vendor-kernel-headers" \
             "$PWD/phase447-inventory"
           echo "P470-A1 strict linked-kernel symbol ABI PASS, runtime not tested" >> "$GITHUB_STEP_SUMMARY"
+      - name: P470-A2 STRICT UNSTUBBED IPA ABI (real SCM/SMMU paths, NO FLASH)
+        if: matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          bash scripts/470_a2_unstubbed_modpost.sh \
+            "$PWD/gki/common" "$PWD/workspace/gki-phase199-out" \
+            "$PWD/workspace/p470-dataipa-donor" \
+            "$PWD/workspace/p470-vendor-kernel-headers" \
+            "$PWD/phase447-inventory"
+          echo "P470-A2 unstubbed strict compilation PASS; not built-in, not hardware-ready" >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve Phase446AF vmlinux for crash decoding
         if: success()
         run: |
@@ -1215,6 +1226,10 @@ jobs:
             phase447-inventory/P470-A1-HARDWARE-GATES.json
             phase447-inventory/P470-A0-UNDEFINED-SYMBOLS.txt
             phase447-inventory/P470-A1-STRICT-MODPOST.log
+            phase447-inventory/P470-A2-REAL-ABI-MODPOST.log
+            phase447-inventory/P470-A2-REAL-ABI-ERRORS.txt
+            scripts/470_a2_unstubbed_modpost.sh
+            vendor/p470/ipa_fmwk.c
             scripts/470_a1_strict_modpost.sh
             scripts/470_a1_lagoon_hardware_gate.py
             scripts/470_a1_lagoon_dataipa_config.h
