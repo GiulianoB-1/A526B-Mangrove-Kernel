@@ -30,6 +30,7 @@ mkdir -p "$HEADERS"
 # Never import an entire, mutable donor branch into the baseline kernel.
 for path in \
   include/linux/ipa.h \
+  include/linux/ipa_fmwk.h \
   include/linux/msm_gsi.h \
   include/linux/ipa_mhi.h \
   include/linux/ipa_uc_offload.h \
@@ -57,6 +58,23 @@ for path in \
     test -s "$HEADERS/$path"
   fi
 done
+# The donor dataipa tree deliberately does not carry the Qualcomm IPA
+# framework. Its real provider is in the matching pinned 5.10 kernel at
+# drivers/platform/msm/ipa_fmwk/ipa_fmwk.c. Without that module, ipam.ko
+# contains real, unresolved calls to IPA's public dispatch APIs.
+# Stage this provider only in the disposable external-module workspace.
+# Do NOT insert it into the boot kernel, production Kconfig, or Image.
+FMWK_DIR="$DONOR/drivers/platform/msm/ipa_fmwk"
+mkdir -p "$FMWK_DIR"
+curl --fail --location --retry 3 --silent --show-error \
+  "https://raw.githubusercontent.com/CodeLinaro-mirror/la_kernel_msm-5.10/$KERNEL_VENDOR_SHA/drivers/platform/msm/ipa_fmwk/ipa_fmwk.c" \
+  -o "$FMWK_DIR/ipa_fmwk.c"
+test -s "$FMWK_DIR/ipa_fmwk.c"
+# This is the original vendor provider compiled as its own module. Kbuild
+# then validates its EXPORT_SYMBOLs alongside ipam.ko in ONE strict modpost.
+printf '%s\n' '# SPDX-License-Identifier: GPL-2.0-only' 'obj-m += ipa_fmwk.o' \
+  > "$FMWK_DIR/Makefile"
+echo "P470 A0 PINNED IPA FRAMEWORK PROVIDER staged (external probe only)"
 # Adapt only the private donor workspace's Kbuild path for this out-of-tree
 # compile experiment. No files in $ROOT, $BUILD/.config, or the boot are changed.
 python3 - <<'PY'
@@ -72,7 +90,7 @@ nested = p / "drivers/platform/msm/Makefile"
 s = nested.read_text()
 old = "DATAIPADRVTOP = $(srctree)/techpack/dataipa/drivers/platform/msm"
 assert s.count(old) == 1, "donor nested Makefile drift"
-nested.write_text(s.replace(old, "DATAIPADRVTOP = $(M)/drivers/platform/msm", 1))
+nested.write_text(s.replace(old, "DATAIPADRVTOP = $(M)/drivers/platform/msm\n\n# Real pinned vendor framework, private probe only.\nobj-m += ipa_fmwk/", 1))
 # Linux 5.10 no longer exports the old uncached ioremap aliases. On ARM64,
 # ioremap()/devm_ioremap() use normal device mapping for MMIO, preserving
 # the Qualcomm driver's intended device-register access semantics.
