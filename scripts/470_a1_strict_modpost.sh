@@ -80,4 +80,23 @@ if [ -s "$UNDEFINED" ]; then
   echo "P470-A1 REFUSE: modpost emitted unresolved symbols despite exit 0" | tee -a "$LOG"
   exit 1
 fi
+# Verify each originally missing IPA public API comes from the actual
+# pinned 5.10 ipa_fmwk.ko provider, NOT from a shim, fake KBUILD_EXTRA_SYMBOLS
+# file, warning downgrade, or exported placeholder in the base kernel.
+test -s "$DONOR/drivers/platform/msm/ipa_fmwk/ipa_fmwk.ko" || {
+  echo "P470-A1 REFUSE: pinned IPA framework module was not built" | tee -a "$LOG"
+  exit 1
+}
+for sym in \
+    ipa_mhi_handle_ipa_config_req ipa_setup_sys_pipe \
+    ipa_register_ipa_ready_cb ipa_send_msg ipa_get_ep_mapping \
+    ipa_get_hw_type ipa_wigig_save_regs ipa_fmwk_register_ipa; do
+  if ! awk -F '\t' -v symbol="$sym" \
+      '$2 == symbol && $3 ~ /\/ipa_fmwk\/ipa_fmwk$/ {found=1} END {exit !found}' \
+      "$DONOR/Module.symvers"; then
+    echo "P470-A1 REFUSE: $sym not exported by real ipa_fmwk module" | tee -a "$LOG"
+    exit 1
+  fi
+done
+echo "P470-A1 REAL IPA FRAMEWORK: all eight missing APIs resolved by pinned 5.10 provider" | tee -a "$LOG"
 echo "P470-A1 STRICT MODPOST PASS: actual linked-kernel exports checked; hardware still blocked" | tee -a "$LOG"
