@@ -286,7 +286,7 @@ def patch(src):
 
 def check(src):
     for token in (MARKER, "of_property_count_u32_elems(dev->of_node",
-                  "IOMMU_RESV_DIRECT", "IOMMU_RESV_RESERVED",
+                  "iommu_iova_to_phys(domain, addr)",
                   "mode=translated(tg=%s) bypass=0",
                   "p470_a2_manual_map_guard(domain, cb, iova, paddr, size)",
                   "iommu_iova_to_phys(domain, addr)",
