@@ -1690,6 +1690,8 @@ jobs:
           python3 scripts/470_a6b_ssr_preprocessed_audit.py \
             --baseline-pas phase447-inventory/P470-A6B-P469B-PAS.i \
             --baseline-ssr phase447-inventory/P470-A6B-P469B-SSR.i \
+            --a6-pas phase447-inventory/P470-A6B-A6-678-PAS.i \
+            --a6-ssr phase447-inventory/P470-A6B-A6-678-SSR.i \
             --a6b-pas "$BUILD/drivers/remoteproc/qcom_q6v5_pas.i" \
             --a6b-ssr "$BUILD/drivers/a52_pil/subsystem_restart.i" \
             --out phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
