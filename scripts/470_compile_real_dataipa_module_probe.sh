@@ -30,6 +30,14 @@ mkdir -p "$HEADERS"
 for path in \
   include/linux/ipa.h \
   include/linux/msm_gsi.h \
+  include/linux/ipa_mhi.h \
+  include/linux/ipa_uc_offload.h \
+  include/linux/ipa_wdi3.h \
+  include/linux/ipa_wigig.h \
+  include/linux/ipa_usb.h \
+  include/linux/ipa_fmwk.h \
+  include/linux/ipc_logging.h \
+  include/linux/mailbox/qmp.h \
   include/uapi/linux/msm_ipa.h \
   include/uapi/linux/msm_rmnet.h \
   include/uapi/linux/rmnet_ipa_fd_ioctl.h \
@@ -60,6 +68,20 @@ s = nested.read_text()
 old = "DATAIPADRVTOP = $(srctree)/techpack/dataipa/drivers/platform/msm"
 assert s.count(old) == 1, "donor nested Makefile drift"
 nested.write_text(s.replace(old, "DATAIPADRVTOP = $(M)/drivers/platform/msm", 1))
+# Linux 5.10 no longer exports the old uncached ioremap aliases. On ARM64,
+# ioremap()/devm_ioremap() use normal device mapping for MMIO, preserving
+# the Qualcomm driver's intended device-register access semantics.
+# This is strictly a donor-workspace source compatibility transform.
+gsi = p / "drivers/platform/msm/gsi/gsi.c"
+g = gsi.read_text()
+for old, new in (("devm_ioremap_nocache(", "devm_ioremap("),
+                 ("ioremap_nocache(", "ioremap(")):
+    num = g.count(old)
+    if num != 1:
+        raise RuntimeError(f"P470 A0 legacy {old} site count={num}, expected one")
+    g = g.replace(old, new, 1)
+gsi.write_text(g)
+print("P470 A0 GSI 5.10 MMIO COMPAT: devm_ioremap + ioremap (unique anchors)")
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
 
