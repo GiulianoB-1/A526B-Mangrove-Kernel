@@ -255,8 +255,17 @@ if rm.count(old_timeout) != 1:
     raise RuntimeError("P470 RMNET timeout callback signature drift")
 rm = rm.replace(old_timeout,
     "static void ipa3_wwan_tx_timeout(struct net_device *dev, unsigned int txqueue)\n"
-    "{\n"
-    "\t(void)txqueue; /* existing per-device diagnostic, not per-queue */\n", 1)
+    "{\n", 1)
+# GNU89 kernel builds require local declarations before any statements.
+timeout_decl = ("static void ipa3_wwan_tx_timeout("
+                "struct net_device *dev, unsigned int txqueue)\n"
+                "{\n"
+                "\tstruct ipa3_wwan_private *wwan_ptr = netdev_priv(dev);\n")
+if rm.count(timeout_decl) != 1:
+    raise RuntimeError("P470 RMNET timeout declaration block drift")
+rm = rm.replace(timeout_decl,
+                timeout_decl +
+                "\n\t(void)txqueue; /* existing per-device diagnostic */\n", 1)
 
 # The three 5.10 debugfs_create_u32() helpers return void. Keep the
 # actual files and keep fail handling for debugfs_create_file(), whose
