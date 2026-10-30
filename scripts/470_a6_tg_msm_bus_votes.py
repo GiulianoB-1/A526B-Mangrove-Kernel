@@ -43,11 +43,11 @@ static int p470_a6_vote(unsigned int state)
         return -ENODEV;
     }
     rc = msm_bus_scale_client_update_request(p470_a6_bus_handle, state);
-    pr_info_ratelimited("P470 IPA BUS vote case=%d rc=%d\n", state, rc);
+    pr_info_ratelimited("P470 IPA BUS vote case=%d rc=%d\n", (int)state, rc);
     if (rc) {
         atomic_set(&p470_a6_vote_failed, 1);
         pr_err_ratelimited("P470 IPA BUS VOTE_FAILED case=%d rc=%d\n",
-                           state, rc);
+                           (int)state, rc);
     }
     return rc;
 }
@@ -176,7 +176,7 @@ def patch(s):
              "static atomic_t p470_a6_vote_failed = ATOMIC_INIT(0);",
              "bus failure latch before MSS readiness waiter")
     s = once(s, "#include <linux/interconnect.h>",
-             "#include <linux/interconnect.h>\n#include <linux/msm-bus.h>",
+             "#include <linux/interconnect.h>\n#include <linux/msm-bus.h>\n#include <linux/ratelimit.h>",
              "real TG bus API include")
     s = once(s, "static int p470_a5_require_bus_backend(struct device *dev)",
              HELPER + "\nstatic int p470_a5_require_bus_backend(struct device *dev)",
