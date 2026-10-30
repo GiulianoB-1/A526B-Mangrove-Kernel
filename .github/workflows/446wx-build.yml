@@ -107,7 +107,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1573,6 +1573,9 @@ jobs:
           python3 scripts/470_a4_ipa_arm.py --root "$ROOT" \
             --report phase447-inventory/P470-A4-ARM-MSS-READY.json
           python3 scripts/470_a4_ipa_arm.py --root "$ROOT" --check-only
+          python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" \
+            --report phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
+          python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" --check-only
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable GSI --enable IPA3 --enable RMNET_IPA3
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
@@ -1605,7 +1608,8 @@ jobs:
           done
           grep -aFq 'mode=translated(tg=%s) bypass=0' "$BUILD/arch/arm64/boot/Image"
           for marker in "P470 IPA ARM" "P470 IPA PROBE" \
-            "P470 IPA FW_LOAD" "P470 IPA GSI READY" "P470 MSS IPA_WAIT"; do
+            "P470 IPA FW_LOAD" "P470 IPA GSI READY" "P470 MSS IPA_WAIT" \
+            "P470 IPA DMA_MAP n="; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P470-A4 missing linked safety marker::$marker"
               exit 1
@@ -1638,6 +1642,7 @@ jobs:
             phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
             phase447-inventory/P470-A4-ARM-MSS-READY.json
             phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json
+            phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
             scripts/470_a3_stage_builtin.py
