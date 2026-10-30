@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A3 native built-in IPA/GSI/RMNET link preflight; NO FLASH
+run-name: P470-A4 IPA ARM/SCM/PAS15/MSS dependency compile gate; NO FLASH
 on:
   push:
     branches:
@@ -20,6 +20,7 @@ on:
       - agent/p470a1-ipa-firmware-smmu-abi-closure-no-flash
       - agent/p470a2-ipa-hardware-gates-no-flash
       - agent/p470a3-builtin-ipa-link-probe-no-flash
+      - agent/p470a4-root-arm-ipa-ready-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -106,7 +107,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1562,6 +1563,11 @@ jobs:
             --framework "$PWD/vendor/p470/ipa_fmwk.c" \
             --features "$PWD/scripts/470_a1_lagoon_dataipa_config.h" \
             --report "$REPORT"
+          # P470-A4 is applied only to the disposable post-P469b A3 source
+          # tree. The uploaded P469b boot was already packaged unchanged.
+          python3 scripts/470_a4_ipa_arm.py --root "$ROOT" \
+            --report phase447-inventory/P470-A4-ARM-MSS-READY.json
+          python3 scripts/470_a4_ipa_arm.py --root "$ROOT" --check-only
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable GSI --enable IPA3 --enable RMNET_IPA3
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
@@ -1593,6 +1599,15 @@ jobs:
             }
           done
           grep -aFq 'mode=translated(tg=%s) bypass=0' "$BUILD/arch/arm64/boot/Image"
+          for marker in "P470 IPA ARM" "P470 IPA PROBE" \
+            "P470 IPA FW_LOAD" "P470 IPA GSI READY" "P470 MSS IPA_WAIT"; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P470-A4 missing linked safety marker::$marker"
+              exit 1
+            }
+          done
+          test "$(stat -c '%a' "$ROOT/include/linux/a52_ipa_arm.h" >/dev/null; grep -Fc '__ATTR(enable, 0200' "$ROOT/drivers/platform/msm/ipa/ipa_v3/ipa.c")" = 1
+          echo 'P470-A4 compiled root-only ARM, SCM defer, PAS15-named acquisition, GSI ready and P468 MSS bounded wait. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           python3 scripts/470_a2_flashability_gate.py \
             --root "$ROOT" --build "$BUILD" \
@@ -1616,6 +1631,7 @@ jobs:
           name: MANGROVE-P470-A3-BUILTIN-NO-FLASH-${{ github.run_number }}
           path: |
             phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
+            phase447-inventory/P470-A4-ARM-MSS-READY.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
             scripts/470_a3_stage_builtin.py
