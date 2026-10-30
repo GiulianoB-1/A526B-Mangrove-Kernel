@@ -63,12 +63,16 @@ done
 # contains real, unresolved calls to IPA's public dispatch APIs.
 # Stage this provider only in the disposable external-module workspace.
 # Do NOT insert it into the boot kernel, production Kconfig, or Image.
+# P470-A2: the provider is now vendored in the audited repository, not
+# curl-fetched from a mutable CI network response during build.
 FMWK_DIR="$DONOR/drivers/platform/msm/ipa_fmwk"
+FMWK_SOURCE="$PWD/vendor/p470/ipa_fmwk.c"
+test -s "$FMWK_SOURCE" || { echo "P470-A2 REFUSE: vendored IPA framework missing" >&2; exit 1; }
+grep -Fq 'EXPORT_SYMBOL(ipa_fmwk_register_ipa);' "$FMWK_SOURCE"
+grep -Fq 'EXPORT_SYMBOL(ipa_mhi_handle_ipa_config_req);' "$FMWK_SOURCE"
 mkdir -p "$FMWK_DIR"
-curl --fail --location --retry 3 --silent --show-error \
-  "https://raw.githubusercontent.com/CodeLinaro-mirror/la_kernel_msm-5.10/$KERNEL_VENDOR_SHA/drivers/platform/msm/ipa_fmwk/ipa_fmwk.c" \
-  -o "$FMWK_DIR/ipa_fmwk.c"
-test -s "$FMWK_DIR/ipa_fmwk.c"
+cp -- "$FMWK_SOURCE" "$FMWK_DIR/ipa_fmwk.c"
+cmp -- "$FMWK_SOURCE" "$FMWK_DIR/ipa_fmwk.c"
 # This is the original vendor provider compiled as its own module. Kbuild
 # then validates its EXPORT_SYMBOLs alongside ipam.ko in ONE strict modpost.
 printf '%s\n' '# SPDX-License-Identifier: GPL-2.0-only' 'obj-m += ipa_fmwk.o' \
