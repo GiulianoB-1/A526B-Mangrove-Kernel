@@ -30,7 +30,7 @@ COMPAT = {
     "wlan_cb": ("qcom,ipa-smmu-wlan-cb",),
     "uc_cb": ("qcom,ipa-smmu-uc-cb",),
     "rmnet": ("qcom,rmnet-ipa3",),
-    "gsi": ("qcom,gsi", "qcom,msm-gsi"),
+    "gsi": ("qcom,msm_gsi",),
     "ipa_in": ("qcom,smp2p-map-ipa-1-in",),
     "ipa_out": ("qcom,smp2p-map-ipa-1-out",),
 }
