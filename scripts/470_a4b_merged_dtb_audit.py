@@ -127,8 +127,12 @@ def main():
         p.error("exactly one of --boot or --base-dtb required")
     if a.dtbo_index != 1:
         p.error("P470-A4b only validated for the phone's DTBO idx 1")
-    base_blob, src = (extract_boot(a.boot.read_bytes())[0], "exact_final_boot")
-                     if a.boot else (a.base_dtb.read_bytes(), "staged_only")
+    if a.boot:
+        base_blob = extract_boot(a.boot.read_bytes())[0]
+        src = "exact_final_boot"
+    else:
+        base_blob = a.base_dtb.read_bytes()
+        src = "staged_only"
     base = describe(fdt(base_blob))
     merged_blob = None
     entry = None
@@ -183,7 +187,8 @@ def main():
         for path, props in merged_tree.items():
             if props.get("qcom,pas-id") == b"\x00\x00\x00\x0f":
                 pas_nodes.append(path)
-        if len(pas_nodes) != 1 or pas_nodes[0] != active["pas15"][0]["path"]:
+        if (len(pas_nodes) != 1 or len(active["pas15"]) != 1 or
+                pas_nodes[0] != active["pas15"][0]["path"]):
             causes.append("PAS15_AUTHENTICATION_OWNER_DUPLICATED_OR_MISMATCHED")
     old_audit = None
     if merged_blob:
