@@ -30,7 +30,6 @@ mkdir -p "$HEADERS"
 # Never import an entire, mutable donor branch into the baseline kernel.
 for path in \
   include/linux/ipa.h \
-  include/linux/ipa_fmwk.h \
   include/linux/msm_gsi.h \
   include/linux/ipa_mhi.h \
   include/linux/ipa_uc_offload.h \
