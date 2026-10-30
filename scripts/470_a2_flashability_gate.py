@@ -64,8 +64,18 @@ def main():
     require("A52_P460B_APPS_SMMU_TG_OPTIN_V1" in smmu and
             "a52_p460b_sme_checksum" in smmu,
             "P460B opt-in / SME checksum audit missing")
-    require("P470 A2 REAL FASTMAP" in smmu,
-            "real, audited S1_BYPASS/FAST and fastmap support not implemented")
+    # P470-A2b adopts the TG *translation* semantics, not Qualcomm's
+    # optional fastmap allocator/page-table speedup. Enforce scoped source
+    # reservations, NOT a requirement to touch global SMMU code.
+    require("P470_A2_LAGOON_IPA_SID_RESV_V1" in smmu and
+            "p470_a2_lagoon_ipa_resv(dev, head);" in smmu and
+            "IOMMU_RESV_DIRECT" in smmu and
+            "IOMMU_RESV_RESERVED" in smmu,
+            "Lagoon IPA SID-scoped translated DMA/direct/pool reservation source absent")
+    require("P470_A2_TRANSLATED_LAGOON_CB_V2" in ipa and
+            "p470_a2_manual_map_guard" in ipa and
+            "iommu_iova_to_phys(domain, addr)" in ipa,
+            "IPA built-in translated-domain and manual-map collision validation absent")
     image = build / "arch/arm64/boot/Image"
     img = image.read_bytes() if image.is_file() else b""
     require(bool(img), "linked final Image missing")
