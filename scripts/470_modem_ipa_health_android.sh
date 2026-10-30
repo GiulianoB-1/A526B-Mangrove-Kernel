@@ -45,13 +45,13 @@ mode=$(echo "$@" | cut -d " " -f1)
 if [ -z "$mode" ]; then mode="--snapshot"; fi
 if [ "$mode" = "--watch" ]; then
     i=0
-    while [ "$i" -lt 30 ]; do
+    while [ "$i" -le 30 ]; do
         echo "P470 WATCH sample=$i/30"
         snapshot
         i=$((i + 1))
         if [ "$i" -lt 30 ]; then sleep 10; fi
     done
-    echo "P470 WATCH DONE samples=30 interval_s=10 duration_s=300"
+    echo "P470 WATCH DONE samples=31 interval_s=10 duration_s=300"
 elif [ "$mode" = "--snapshot" ]; then
     snapshot
 else
