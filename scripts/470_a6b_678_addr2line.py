@@ -47,6 +47,7 @@ def main():
     sec = run([readelf, "-SW", str(vm)])
     if ".debug_info" not in sec:
         raise RuntimeError("P470-A6b missing DWARF .debug_info in preserved original vmlinux")
+    a.out.mkdir(parents=True, exist_ok=True)
     reports = {}
     for symbol, offsets in (
         ("adsp_probe", list(range(0x370, 0x3b4, 4))),
