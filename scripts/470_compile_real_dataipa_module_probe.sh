@@ -12,6 +12,7 @@ BUILD="$2"
 DONOR="$3"
 HEADERS="$4"
 export DONOR
+export ROOT
 EXPECTED_DATAIPA=c560cc3c2840fb0ebc55ceef5b27549c66143637
 KERNEL_VENDOR_SHA=f438c918a464b82d4a637b5327dd1ed6e8b625dc
 test -s "$ROOT/Makefile"
@@ -85,6 +86,44 @@ for old, new in (("devm_ioremap_nocache(", "devm_ioremap("),
     g = g.replace(old, new, 1)
 gsi.write_text(g)
 print("P470 A0 GSI 5.10 MMIO COMPAT: devm_ioremap + ioremap (unique anchors)")
+# The Android 5.10 debugfs_create_u32 API returns void. Keep the
+# vendor's debugfs_create_file dentry checks, but stop assigning/testing
+# the seven create_u32 results. Check the exact old shape before editing.
+import re
+debugfs = p / "drivers/platform/msm/ipa/ipa_v3/ipa_debugfs.c"
+d = debugfs.read_text()
+pattern = re.compile(
+    r"(?m)^(?P<indent>\s*)file = debugfs_create_u32\((?P<args>[^;]+)\);\n"
+    r"(?P=indent)if \(!file\) \{\n"
+    r"(?P<error>.*?)(?P=indent)\}\n",
+    re.S,
+)
+def migrate_create_u32(m):
+    body = m.group("error")
+    if "goto fail;" not in body or "IPAERR(" not in body:
+        raise RuntimeError("P470 debugfs u32 failure shape drift")
+    return m.group("indent") + "debugfs_create_u32(" + m.group("args") + ");\n"
+d, n = pattern.subn(migrate_create_u32, d)
+if n != 7 or "file = debugfs_create_u32(" in d:
+    raise RuntimeError(f"P470 debugfs u32 site count={n}, expected seven")
+debugfs.write_text(d)
+print("P470 A0 DEBUGFS 5.10 COMPAT: seven create_u32 void-return sites")
+
+# TRACE_INCLUDE_PATH is resolved from the kernel's include/trace/
+# define_trace.h, not from the donor's ipa_trace.h. Calculate the path
+# to the real, pinned donor header in this private workspace only.
+trace = p / "drivers/platform/msm/ipa/ipa_v3/ipa_trace.h"
+t = trace.read_text()
+old = "#define TRACE_INCLUDE_PATH ../../techpack/dataipa/drivers/platform/msm/ipa/ipa_v3"
+relative_trace = os.path.relpath(trace.parent.resolve(),
+                                 Path(os.environ["ROOT"]).resolve() / "include/trace")
+new = "#define TRACE_INCLUDE_PATH " + relative_trace
+if t.count(old) != 1 or not (trace.parent / "ipa_trace.h").is_file():
+    raise RuntimeError("P470 trace include source drift")
+t = t.replace(old, new)
+trace.write_text(t)
+print("P470 A0 TRACE 5.10 COMPAT: " + new)
+
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
 
