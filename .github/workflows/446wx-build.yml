@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A0 real IPA source and ABI audit, boot intentionally P469b 605 (IPA OFF)
+run-name: P470-A0 external-module compile probe of real GSI/IPA3/rmnet; NO flashable IPA image
 on:
   push:
     branches:
@@ -16,6 +16,7 @@ on:
       - agent/p469-mss-fatal-guard-pstore-p468b-596
       - agent/p469b-mss-offline-pstore-audit-from-598
       - agent/p470-ipa-a0-source-dependency-audit-from-p469b-605
+      - agent/p470a0-ipa-real-compile-probe-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -99,6 +100,7 @@ jobs:
           python3 scripts/469b_pstore_driver.py --self-test
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
+          bash -n scripts/470_compile_real_dataipa_module_probe.sh
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -915,6 +917,17 @@ jobs:
           grep -Fq ' a52_p445_run_r2' "$MAP"
           ! grep -aFq 'A52_PHASE442_FIFO_FETCH_DISCRIMINATOR_V1' "$IMAGE"
           ccache -s
+      - name: P470-A0 real dataipa GSI IPA3 rmnet compile probe (NO FLASH)
+        if: matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p phase447-inventory
+          bash scripts/470_compile_real_dataipa_module_probe.sh \
+            "$PWD/gki/common" "$PWD/workspace/gki-phase199-out" \
+            "$PWD/workspace/p470-dataipa-donor" \
+            "$PWD/workspace/p470-vendor-kernel-headers" \
+            2>&1 | tee phase447-inventory/P470-A0-REAL-MODULE-COMPILE.log
+          echo 'P470 A0 module compile only: no IPA DT/firmware/modem changes and NO IPA flash artifact' >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve Phase446AF vmlinux for crash decoding
         if: success()
         run: |
@@ -1181,6 +1194,8 @@ jobs:
           path: |
             phase447-inventory/P470-A0-IPA-SOURCE-DEPENDENCY-AUDIT.json
             scripts/470_ipa_a0_source_audit.py
+            scripts/470_compile_real_dataipa_module_probe.sh
+            phase447-inventory/P470-A0-REAL-MODULE-COMPILE.log
           if-no-files-found: warn
           compression-level: 6
       - name: Upload Phase446i GKI failure diagnostics
