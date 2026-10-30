@@ -247,7 +247,7 @@ def check(root):
         "a52_p470_ssr_desc_alloc(&caller_abi)",
         "a52_p470_ssr_desc_free(adsp->a52_modem_ssr_desc)",
         "dev_info(&pdev->dev,\n              \"P468 MSS SUBSYS REGISTER",
-        "P470 MSS IPA_WAIT disarmed=1 P469b_passthrough=1",
+        "P470 MSS WAIT_TIMEOUT modem_not_started",
         "a52_p470_mss_legacy_enter();",
     ):
         if token not in pas:
