@@ -227,14 +227,14 @@ echo "P470 A0 DATAIPA_SHA=$EXPECTED_DATAIPA vendor_abi_sha=$KERNEL_VENDOR_SHA"
 # The 5.10 techpack normally uses config/dataipa.h under ARCH_LAHAINA.
 # This is an API-compatibility *compile probe*, not a deployable Kconfig
 # replacement. Undefined exports and vendor-only APIs must fail the probe.
+# Keep building independent driver objects after a compiler error. Kbuild still
+# exits nonzero on any error, preserving the strict compile gate, but the log
+# gathers more than a single missing kernel API per GitHub runner attempt.
 make -C "$ROOT" O="$BUILD" ARCH=arm64 \
   CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
   LLVM=1 LLVM_IAS=1 \
   M="$DONOR" \
   CONFIG_GSI=m CONFIG_IPA3=m CONFIG_RMNET_IPA3=y \
   KCFLAGS="-DP470_A0_COMPILE_ONLY=1 -DCONFIG_IPA3 -I$HEADERS/include -I$HEADERS/include/uapi -include $DONOR/config/dataipa.h" \
-# Keep building independent driver objects after a compiler error. Kbuild still
-# exits nonzero on any error, preserving the strict compile gate, but the log
-# gathers more than a single missing kernel API per GitHub runner attempt.
   -k -j"$(nproc)" modules
 echo "P470 A0 MODULE SOURCE COMPILE PASS (NOT A HARDWARE/IPA READY PASS)"
