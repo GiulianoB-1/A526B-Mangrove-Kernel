@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A5 live-DT ABI and legacy 5x5 bus fail-closed prearm gate; NO FLASH
+run-name: P470-A6 real TG msm_bus RPMh IPA5x5 client and native link diagnostic; NO FLASH
 on:
   push:
     branches:
@@ -23,6 +23,7 @@ on:
       - agent/p470a4-root-arm-ipa-ready-no-flash
       - agent/p470a4b-merged-dt-modem-policy-no-flash
       - agent/p470a5-lagoon-legacy-bus-vote-gate-no-flash
+      - agent/p470a6-tg-msm-bus-real-votes-firstflash-gated
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1603,6 +1604,17 @@ jobs:
           python3 scripts/470_a5_bus_prearm_gate.py --root "$ROOT" \
             --report phase447-inventory/P470-A5-LEGACY-BUS-VOTE-BLOCKER.json
           python3 scripts/470_a5_bus_prearm_gate.py --root "$ROOT" --check-only
+          # A6: use Phase252's real TG RPMh msm_bus implementation.
+          # Reject the inline fake stubs when either Kconfig is absent.
+          for flag in CONFIG_QCOM_BUS_SCALING=y CONFIG_QCOM_BUS_CONFIG_RPMH=y; do
+            grep -Fxq "$flag" "$BUILD/.config" || {
+              echo "::error title=P470-A6 real Phase252 TG bus driver missing::$flag"
+              exit 1
+            }
+          done
+          python3 scripts/470_a6_tg_msm_bus_votes.py --root "$ROOT" \
+            --report phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
+          python3 scripts/470_a6_tg_msm_bus_votes.py --root "$ROOT" --check-only
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" \
             --report phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" --check-only
@@ -1630,7 +1642,7 @@ jobs:
             echo "P470-A3 native built-in link FAILED rc=$RC; NO FLASH" | tee -a "$LOG"
             exit "$RC"
           fi
-          for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping; do
+          for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping msm_bus_scale_register_client msm_bus_scale_client_update_request msm_bus_scale_unregister_client; do
             grep -Eq "[[:space:]]$symbol$" "$BUILD/System.map" || {
               echo "::error title=P470-A3 real built-in provider not linked::$symbol"
               exit 1
@@ -1642,7 +1654,9 @@ jobs:
             "P470 IPA DMA_MAP n=" "P470 MSS NOTIF event=" \
             "P470 MSS WAIT_TIMEOUT modem_not_started" \
             "P470 MSS IPA_WAIT disarmed=1 P469b_passthrough=1" \
-            "P470 IPA BUS BLOCKED legacy_vectors=5x5" \
+            "P470 IPA BUS register client=%u cases=5 paths=5" \
+            "P470 IPA BUS vote case=%d rc=%d" \
+            "P470 IPA BUS VOTE_FAILED" \
             "P470 IPA BUS TABLE state="; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P470-A4 missing linked safety marker::$marker"
@@ -1650,7 +1664,7 @@ jobs:
             }
           done
           test "$(stat -c '%a' "$ROOT/include/linux/a52_ipa_arm.h" >/dev/null; grep -Fc '__ATTR(enable, 0200' "$ROOT/drivers/platform/msm/ipa/ipa_v3/ipa.c")" = 1
-          echo 'P470-A5 legacy bus 5x5 table is not a real ICC vote: hardware activation fails closed without provider. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P470-A6 actual Phase252 TG msm_bus API linked, five legacy IPA routes validated, real RPMh client/votes installed, runtime unproven. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           python3 scripts/470_a2_flashability_gate.py \
             --root "$ROOT" --build "$BUILD" \
@@ -1680,6 +1694,7 @@ jobs:
             phase447-inventory/P470-A4B-MSS-NOTIFIER.json
             phase447-inventory/P470-A5-LEGACY-BUS-VOTE-BLOCKER.json
             phase447-inventory/P470-A5-LIVE-FDT-ABI.json
+            phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
             phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
@@ -1688,5 +1703,6 @@ jobs:
             scripts/470_a4b_mss_notifier.py
             scripts/470_a5_bus_prearm_gate.py
             scripts/470_a5_live_ipa_audit.py
+            scripts/470_a6_tg_msm_bus_votes.py
           if-no-files-found: warn
           compression-level: 6
