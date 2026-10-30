@@ -67,13 +67,18 @@ def main():
     # P470-A2b adopts the TG *translation* semantics, not Qualcomm's
     # optional fastmap allocator/page-table speedup. Enforce scoped source
     # reservations, NOT a requirement to touch global SMMU code.
-    require("P470_A2_LAGOON_IPA_SID_RESV_V1" in smmu and
+    require("P470_A2_LAGOON_IPA_DMA_POOL_COMPLEMENT_V2" in smmu and
             "p470_a2_lagoon_ipa_resv(dev, head);" in smmu and
+            "p470_a2_ipa_reserve_complement" in smmu and
+            "pool_start - lo" in smmu and
+            "hi - pool_end + 1" in smmu and
+            "outside_reserved=1" in smmu and
             "IOMMU_RESV_DIRECT" in smmu and
             "IOMMU_RESV_RESERVED" in smmu,
-            "Lagoon IPA SID-scoped translated DMA/direct/pool reservation source absent")
+            "Lagoon IPA SID-scoped DIRECT and outside-DMA-pool complement reservations absent")
     require("P470_A2_TRANSLATED_LAGOON_CB_V2" in ipa and
             "p470_a2_manual_map_guard" in ipa and
+            "0xF0000000ULL" in ipa and
             "iommu_iova_to_phys(domain, addr)" in ipa,
             "IPA built-in translated-domain and manual-map collision validation absent")
     image = build / "arch/arm64/boot/Image"
