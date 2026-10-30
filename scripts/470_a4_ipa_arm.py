@@ -39,6 +39,11 @@ int a52_p470_ipa_wait_ready(unsigned long timeout)
 {
     if (!of_machine_is_compatible("qcom,lagoon"))
         return 0;
+    /* A4b: exactly P469b when not armed, with no 15-second wait. */
+    if (!atomic_read(&p470_a4_armed)) {
+        pr_info("P470 MSS IPA_WAIT disarmed=1 P469b_passthrough=1\n");
+        return 0;
+    }
     if (!wait_for_completion_timeout(&p470_a4_ipa_ready, timeout)) {
         pr_err("P470 MSS IPA_WAIT timeout armed=%d pas15=%d rc=-ETIMEDOUT\n",
                atomic_read(&p470_a4_armed),
@@ -248,7 +253,7 @@ def transform_pas(s):
      */
     ret = a52_p470_ipa_wait_ready(msecs_to_jiffies(15000));
     if (ret) {
-        dev_err(adsp->dev, "P470 MSS IPA_WAIT blocked rc=%d\\n", ret);
+        dev_err(adsp->dev, "P470 MSS WAIT_TIMEOUT modem_not_started rc=%d\\n", ret);
         return ret;
     }
 '''
@@ -268,6 +273,7 @@ def check(root):
         'return -EPROBE_DEFER;', 'device_reprobe(dev)',
         'P470 IPA ARM', 'P470 IPA PROBE',
         'P470 IPA FW_LOAD', 'P470 IPA GSI READY',
+        'P470 MSS IPA_WAIT disarmed=1 P469b_passthrough=1',
         'DIRECT iova_to_phys iova=', 'force_aperture=%d aperture=',
         'complete_all(&p470_a4_ipa_ready);',
         'subsystem_get(sub_sys)',
@@ -278,6 +284,7 @@ def check(root):
     required_pas = (
         '#include <linux/a52_ipa_arm.h>',
         'P470 MSS IPA_WAIT',
+        'P470 MSS WAIT_TIMEOUT modem_not_started',
         'a52_p470_ipa_wait_ready(msecs_to_jiffies(15000));',
         'P469B MSS AUTO_REBOOT_BLOCK',
         'rproc_boot(adsp->rproc)',
@@ -299,7 +306,9 @@ def check(root):
         "one_shot": True,
         "scm_precondition": True,
         "pas15_name": "lagoon_ipa_fws",
-        "modem_wait_ms": 15000,
+        "modem_wait_ms_if_armed": 15000,
+        "disarmed_mss": "P469b no-wait behavior",
+        "armed_timeout": "no modem start, no power reference",
         "real_post_init_completion": True,
         "donor_assert_still_bug": True,
         "hardware_verified": False,

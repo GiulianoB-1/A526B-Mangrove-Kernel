@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A4 IPA ARM/SCM/PAS15/MSS dependency compile gate; NO FLASH
+run-name: P470-A4b merged DTBO1 audit, disarmed MSS bypass and real SSR producer; NO FLASH
 on:
   push:
     branches:
@@ -21,6 +21,7 @@ on:
       - agent/p470a2-ipa-hardware-gates-no-flash
       - agent/p470a3-builtin-ipa-link-probe-no-flash
       - agent/p470a4-root-arm-ipa-ready-no-flash
+      - agent/p470a4b-merged-dt-modem-policy-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -107,7 +108,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1561,6 +1562,18 @@ jobs:
           python3 scripts/470_a4_dtb_audit.py \
             --dtb "$PWD/phase447b-variants/P468-MSS-SUBSYS.dtb" \
             --report "$PWD/phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json"
+          # The five missing-node reports above refer only to the staged DTB.
+          # The actual final boot+DTBO idx1 is authoritative. CI has no
+          # copy of the phone's flashed DTBO partition: classify, do not
+          # claim a merged-tree PASS or add any duplicate PAS15 owner.
+          DTBO_OPT=()
+          DTBO_CAPTURE="$PWD/phase447b-variants/P470-A4B-FLASHED-DTBO.img"
+          if [ -s "$DTBO_CAPTURE" ]; then
+            DTBO_OPT=(--dtbo "$DTBO_CAPTURE")
+          fi
+          python3 scripts/470_a4b_merged_dtb_audit.py \
+            --boot "$ORIGINAL_BOOT" "${DTBO_OPT[@]}" \
+            --report phase447-inventory/P470-A4B-MERGED-DTB-PROVENANCE.json
           python3 scripts/470_a3_stage_builtin.py \
             --root "$ROOT" \
             --donor "$PWD/workspace/p470-dataipa-donor" \
@@ -1573,6 +1586,9 @@ jobs:
           python3 scripts/470_a4_ipa_arm.py --root "$ROOT" \
             --report phase447-inventory/P470-A4-ARM-MSS-READY.json
           python3 scripts/470_a4_ipa_arm.py --root "$ROOT" --check-only
+          python3 scripts/470_a4b_mss_notifier.py --root "$ROOT" \
+            --report phase447-inventory/P470-A4B-MSS-NOTIFIER.json
+          python3 scripts/470_a4b_mss_notifier.py --root "$ROOT" --check-only
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" \
             --report phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" --check-only
@@ -1609,7 +1625,9 @@ jobs:
           grep -aFq 'mode=translated(tg=%s) bypass=0' "$BUILD/arch/arm64/boot/Image"
           for marker in "P470 IPA ARM" "P470 IPA PROBE" \
             "P470 IPA FW_LOAD" "P470 IPA GSI READY" "P470 MSS IPA_WAIT" \
-            "P470 IPA DMA_MAP n="; do
+            "P470 IPA DMA_MAP n=" "P470 MSS NOTIF event=" \
+            "P470 MSS WAIT_TIMEOUT modem_not_started" \
+            "P470 MSS IPA_WAIT disarmed=1 P469b_passthrough=1"; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P470-A4 missing linked safety marker::$marker"
               exit 1
@@ -1642,9 +1660,13 @@ jobs:
             phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
             phase447-inventory/P470-A4-ARM-MSS-READY.json
             phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json
+            phase447-inventory/P470-A4B-MERGED-DTB-PROVENANCE.json
+            phase447-inventory/P470-A4B-MSS-NOTIFIER.json
             phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
             scripts/470_a3_stage_builtin.py
+            scripts/470_a4b_merged_dtb_audit.py
+            scripts/470_a4b_mss_notifier.py
           if-no-files-found: warn
           compression-level: 6
