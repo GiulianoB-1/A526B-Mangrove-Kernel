@@ -42,6 +42,7 @@ for path in \
   include/linux/ipa_eth.h \
   include/linux/ipc_logging.h \
   include/linux/mailbox/qmp.h \
+  include/net/rmnet_config.h \
   include/uapi/linux/msm_ipa.h \
   include/uapi/linux/msm_rmnet.h \
   include/uapi/linux/rmnet_ipa_fd_ioctl.h \
@@ -212,6 +213,37 @@ if nat_src.count(old_nat) != 1:
 nat.write_text(nat_src.replace(old_nat,
           "#include <linux/dma-mapping.h>\n#include <linux/dma-map-ops.h>", 1))
 print("P470 A0 NAT 5.10 COMPAT: coherent DMA API + dev_is_dma_coherent declaration")
+
+# Linux 5.10 debugfs_create_u8/u16 return void, not a dentry.
+# The original driver's four 'file = ...; if (IS_ERR_OR_NULL(file))'
+# paths are invalid. Change only exact sites and remove their now-dead
+# local/fail label. Keep the real debugfs creation calls and values.
+wigig = p / "drivers/platform/msm/ipa/ipa_v3/ipa_wigig_i.c"
+w = wigig.read_text()
+old_head = "\tstruct dentry *file = NULL;\n\tstruct dentry *dent;"
+if w.count(old_head) != 1:
+    raise RuntimeError("P470 WiGig debugfs variable shape drift")
+w = w.replace(old_head, "\tstruct dentry *dent;", 1)
+wigig_pattern = re.compile(
+    r"(?m)^\tfile = (debugfs_create_u(?:8|16)\([^;]+\));\n"
+    r"\tif \(IS_ERR_OR_NULL\(file\)\) \{\n"
+    r"\t\tIPAERR\(\"fail to create file [^\"\n]+\\n\"\);\n"
+    r"\t\tgoto fail;\n"
+    r"\t\}\n",
+)
+w, n = wigig_pattern.subn(lambda m: "\t" + m.group(1) + ";\n", w)
+if n != 4:
+    raise RuntimeError(f"P470 WiGig debugfs matches={n}, expected four")
+old_tail = ("fail:\n"
+            "\tdebugfs_remove_recursive(dent);\n"
+            "\twigig_dent = NULL;\n"
+            "\treturn -EFAULT;\n"
+            "}\n#endif")
+if w.count(old_tail) != 1:
+    raise RuntimeError("P470 WiGig dead fail label shape drift")
+w = w.replace(old_tail, "}\n#endif", 1)
+wigig.write_text(w)
+print("P470 A0 WIGIG 5.10 COMPAT: four debugfs void-return calls")
 
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
