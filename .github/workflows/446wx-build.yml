@@ -103,7 +103,7 @@ jobs:
           python3 -m py_compile scripts/470_ipa_a0_source_audit.py
           python3 scripts/470_ipa_a0_source_audit.py --self-test
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
-          python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py
+          python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -972,8 +972,11 @@ jobs:
           python3 scripts/470_a2_flashability_gate.py \
             --root "$PWD/gki/common" --build "$PWD/workspace/gki-phase199-out" \
             --report phase447-inventory/P470-A2-FLASHABILITY-GATES.json
-      - name: P470-A2 enforce built-in/DT/PAS/SMMU/SSR flashability policy
-        if: matrix.variant.id == 'G'
+      - name: P470-A2 enforce built-in/DT/PAS/SMMU/SSR flashability policy (explicit IPA packaging only)
+        # The default G artifact is still the proven NO-IPA P469b baseline.
+        # A no-flash ABI preflight must NOT be forced to pass production gates.
+        # If IPA packaging is explicitly opted in, enforce every blocker.
+        if: matrix.variant.id == 'G' && env.P470_A2_REQUEST_FLASH == '1'
         run: |
           set -Eeuo pipefail
           python3 scripts/470_a2_flashability_gate.py \
@@ -1247,6 +1250,7 @@ jobs:
             phase447-inventory/P470-A0-UNDEFINED-SYMBOLS.txt
             phase447-inventory/P470-A1-STRICT-MODPOST.log
             phase447-inventory/P470-A2-REAL-SCM.json
+            phase447-inventory/P470-A2-IOMMU-ABI-PREFLIGHT.json
             phase447-inventory/P470-A2-REAL-ABI-MODPOST.log
             phase447-inventory/P470-A2-REAL-ABI-ERRORS.txt
             phase447-inventory/P470-A2-FLASHABILITY-GATES.json
