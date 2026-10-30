@@ -219,9 +219,9 @@ def check(root):
     for token in (TAG, "subsys_notif_queue_notification(handle,",
                   "subsys_notif_add_subsys(\"modem\")",
                   "P470 MSS NOTIF event=",
-                  "p470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP)",
-                  "p470_mss_queue_notify(rproc, SUBSYS_BEFORE_SHUTDOWN)",
-                  "p470_mss_queue_notify(rproc, SUBSYS_AFTER_SHUTDOWN)",
+                  "p470_mss_queue_notify(rproc, SUBSYS_AFTER_POWERUP, false)",
+                  "p470_mss_queue_notify(rproc, SUBSYS_BEFORE_SHUTDOWN, crashed)",
+                  "p470_mss_queue_notify(rproc, SUBSYS_AFTER_SHUTDOWN, crashed)",
                   "alloc_ordered_workqueue(",
                   "READ_ONCE(p470_mss_legacy_task) == current"):
         if token not in core:
