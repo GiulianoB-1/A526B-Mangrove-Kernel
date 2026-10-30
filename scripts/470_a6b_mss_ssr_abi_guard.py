@@ -32,6 +32,7 @@ struct a52_ssr_desc_abi {
     size_t shutdown;
     size_t state;
     size_t force_stop_bit;
+    size_t err_fatal_irq;
 };
 struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *caller);
 void a52_p470_ssr_desc_free(struct subsys_desc *desc);
@@ -54,18 +55,19 @@ struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *calle
         .shutdown = offsetof(struct subsys_desc, shutdown),
         .state = offsetof(struct subsys_desc, state),
         .force_stop_bit = offsetof(struct subsys_desc, force_stop_bit),
+        .err_fatal_irq = offsetof(struct subsys_desc, err_fatal_irq),
     };
 
     if (!caller)
         return ERR_PTR(-EINVAL);
-    pr_info("P470-A6b SSR ABI PAS size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu\n",
+    pr_info("P470-A6b SSR ABI PAS size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu irq=%zu\n",
             caller->size, caller->name, caller->dev, caller->owner,
             caller->powerup, caller->shutdown, caller->state,
-            caller->force_stop_bit);
-    pr_info("P470-A6b SSR ABI TG size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu\n",
+            caller->force_stop_bit, caller->err_fatal_irq);
+    pr_info("P470-A6b SSR ABI TG size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu irq=%zu\n",
             provider.size, provider.name, provider.dev, provider.owner,
             provider.powerup, provider.shutdown, provider.state,
-            provider.force_stop_bit);
+            provider.force_stop_bit, provider.err_fatal_irq);
     if (caller->size != provider.size ||
         caller->name != provider.name ||
         caller->dev != provider.dev ||
@@ -73,7 +75,8 @@ struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *calle
         caller->powerup != provider.powerup ||
         caller->shutdown != provider.shutdown ||
         caller->state != provider.state ||
-        caller->force_stop_bit != provider.force_stop_bit) {
+        caller->force_stop_bit != provider.force_stop_bit ||
+        caller->err_fatal_irq != provider.err_fatal_irq) {
         pr_err("P470-A6b SSR ABI MISMATCH: refusing modem char shim\n");
         return ERR_PTR(-EPROTO);
     }
@@ -96,6 +99,7 @@ ABI_C = r'''{
         .shutdown = offsetof(struct subsys_desc, shutdown),
         .state = offsetof(struct subsys_desc, state),
         .force_stop_bit = offsetof(struct subsys_desc, force_stop_bit),
+        .err_fatal_irq = offsetof(struct subsys_desc, err_fatal_irq),
     }'''
 
 
@@ -120,12 +124,19 @@ def patch_ssr(s):
     return s
 
 
-def patch_pas(s):
+def patch_pas(s, root):
     if TAG in s:
         raise RuntimeError("A6b PAS already patched")
+    # Root cause: GKI's native include/soc/qcom/subsystem_restart.h
+    # is SMALLER than the TG header used by drivers/a52_pil. Both object
+    # units must compile against EXACTLY the same TouchGrass descriptor.
+    # This path is relative to drivers/remoteproc/qcom_q6v5_pas.c.
+    tg_header = root / "a52-compat/include/soc/qcom/subsystem_restart.h"
+    if not tg_header.is_file():
+        raise RuntimeError("A6b TG SSR header missing at " + str(tg_header))
     s = once(s, '#include <soc/qcom/subsystem_restart.h>',
-             '#include <soc/qcom/subsystem_restart.h>\n'
-             '#include <linux/a52_mss_ssr_abi.h>', "PAS ABI include")
+             '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h>\n'
+             '#include <linux/a52_mss_ssr_abi.h>', "PAS TG SSR canonical ABI include")
     s = once(s, '\tstruct subsys_desc a52_modem_ssr_desc;',
              '\tstruct subsys_desc *a52_modem_ssr_desc;',
              "do not embed SSR descriptor before PAS dev")
@@ -279,6 +290,7 @@ def check(root):
     if "struct subsys_desc a52_modem_ssr_desc;" in pas:
         raise RuntimeError("A6b still embeds downstream descriptor in qcom_adsp")
     for token in (
+        '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"',
         "struct subsys_desc *a52_modem_ssr_desc;",
         "P470-A6b MSS SSR ABI reject",
         "P470-A6b PAS ABI qcom_adsp_size=",
@@ -305,7 +317,7 @@ def check(root):
         "provider_unit_allocation": True,
         "pas_ssr_descriptor_embedded": False,
         "layout_fields_compared": ["size","name","dev","owner","powerup",
-                                   "shutdown","state","force_stop_bit"],
+                                   "shutdown","state","force_stop_bit","err_fatal_irq"],
         "mss_probe_log_uses_platform_dev": True,
         "mss_dev_canary_before_after": True,
         "canary_corruption_unregister_free_restore": True,
@@ -331,7 +343,7 @@ def main():
         f = a.root / SSR
         f.write_text(patch_ssr(f.read_text()))
         f = a.root / PAS
-        f.write_text(patch_pas(f.read_text()))
+        f.write_text(patch_pas(f.read_text(), a.root))
     result = check(a.root)
     if a.report:
         a.report.parent.mkdir(parents=True, exist_ok=True)
