@@ -209,8 +209,9 @@ nat_src = nat.read_text()
 old_nat = "#include <linux/dma-noncoherent.h>"
 if nat_src.count(old_nat) != 1:
     raise RuntimeError("P470 A0 NAT obsolete header anchor drift")
-nat.write_text(nat_src.replace(old_nat, "#include <linux/dma-mapping.h>", 1))
-print("P470 A0 NAT 5.10 COMPAT: coherent DMA header")
+nat.write_text(nat_src.replace(old_nat,
+          "#include <linux/dma-mapping.h>\n#include <linux/dma-map-ops.h>", 1))
+print("P470 A0 NAT 5.10 COMPAT: coherent DMA API + dev_is_dma_coherent declaration")
 
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
