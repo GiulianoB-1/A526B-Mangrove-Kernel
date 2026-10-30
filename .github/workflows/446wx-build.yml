@@ -997,6 +997,7 @@ jobs:
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P468b modem SSR ownership marker not linked::$marker"; exit 1; }
             done
             echo 'P468b modem-only qcom,force-stop lookup bypass (-ENOENT), no second SMP2P stop owner, REGISTER prints actual major/minor rc=0' >> "$GITHUB_STEP_SUMMARY"
+            BUILD="$PWD/workspace/gki-phase199-out"
             # P469b diagnostics are deliberately before the mandatory marker
             # loop. Do not mask absent symbols or fabricate image markers.
             for file in "$BUILD/fs/pstore/ram.o" "$BUILD/vmlinux" "$BUILD/arch/arm64/boot/Image"; do
@@ -1010,7 +1011,7 @@ jobs:
             nm -a "$BUILD/fs/pstore/ram.o" 2>&1 | grep -E 'ramoops|__initcall|pstore' | head -45 || true
             echo 'P469B RAMOOPS VMLINUX SYMBOLS:'
             nm -a "$BUILD/vmlinux" 2>&1 | grep -E 'ramoops_init|ramoops_probe|__initcall.*ramoops' | head -35 || true
-            for marker in 'P469 MSS CRASHLOOP_STOP fatals=' 'P469 MSS MANUAL_RESTART retry_offline=1' 'P469 PSTORE NODE_MATCH node=' 'P469 PSTORE NODE_REJECT node=' 'P469B MSS STOP_OFFLINE rc=0' 'P469B MSS STOP_FAILED rc=' 'P469B MSS MANUAL_START ref_reuse=1' 'P469B MSS LAST_REF offline_cleanup' 'P469B MSS AUTO_REBOOT_BLOCK offline=1' 'P469B PSTORE INIT register_rc=' 'P469B PSTORE DT_OWNER node='; do
+            for marker in 'P469 MSS CRASHLOOP_STOP fatals=' 'P469 MSS MANUAL_RESTART retry_offline=1' 'P469 PSTORE NODE_MATCH node=' 'P469 PSTORE NODE_REJECT node=' 'P469B MSS STOP_OFFLINE rc=0' 'P469B MSS STOP_FAILED rc=' 'P469B MSS MANUAL_START ref_reuse=1' 'P469B MSS LAST_REF offline_cleanup' 'P469B MSS AUTO_REBOOT_BLOCK offline=1' 'P469B PSTORE INIT register_rc=' 'P469B PSTORE DT_OWNER node=' 'P469B PSTORE EARLY_DIAG_DISABLED overlap='; do
               grep -aFq "$marker" workspace/gki-phase199-out/arch/arm64/boot/Image || { echo "::error title=P469 mandatory linked Image marker missing::$marker"; exit 1; }
             done
             echo 'P469b second fatal triggers real GLINK+PAS stop to OFFLINE, skips only restart, accepts manual state/start with correct refs; ramoops built-in initcall tracer linked' >> "$GITHUB_STEP_SUMMARY"
