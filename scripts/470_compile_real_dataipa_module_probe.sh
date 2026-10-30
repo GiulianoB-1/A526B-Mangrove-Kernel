@@ -88,6 +88,12 @@ print("P470 A0 GSI 5.10 MMIO COMPAT: devm_ioremap + ioremap (unique anchors)")
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
 
+# This now runs before the full Image compile: prepare genuine generated
+# headers and scripts without linking/repacking any production kernel.
+make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+  CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+  LLVM=1 LLVM_IAS=1 modules_prepare
+echo "P470 A0 MODULES_PREPARE PASS (no Image linked)"
 echo "P470 A0 MODULE PROBE: real GSI + IPA3 + RMNET_IPA3 (NO BOOT)"
 echo "P470 A0 DATAIPA_SHA=$EXPECTED_DATAIPA vendor_abi_sha=$KERNEL_VENDOR_SHA"
 # The 5.10 techpack normally uses config/dataipa.h under ARCH_LAHAINA.
