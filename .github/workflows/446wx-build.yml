@@ -381,6 +381,15 @@ jobs:
               --root "$ROOT" --donor "$DONOR" \
               --tg "$PWD/workspace/touchgrass-a52xq" \
               --report phase447-inventory/P470-A0-IPA-SOURCE-DEPENDENCY-AUDIT.json
+            # P470-A1: verify the EXACT TouchGrass Lagoon v4.7 hardware
+            # contract and preserve P460B default SMMU suspend veto.
+            # This emits a blocker report, not a flashable firmware port.
+            python3 scripts/470_a1_lagoon_hardware_gate.py \
+              --root "$ROOT" --donor "$DONOR" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --config "$PWD/workspace/gki-phase199-out/.config" \
+              --report phase447-inventory/P470-A1-HARDWARE-GATES.json
+            echo 'P470 A1 source HW contract verified (SMMU/PAS/SSR hardware still blocked)' >> "$GITHUB_STEP_SUMMARY"
             echo 'P470 A0 audit only: source ABI inventory generated, IPA3/GSI NOT enabled, no modem changes' >> "$GITHUB_STEP_SUMMARY"
             # Fail-closed P469b triage: inspect the REAL restored source after patching.
             # The previous runs compiled ram.o but its init marker was not linked.
@@ -928,6 +937,16 @@ jobs:
           grep -Fq ' a52_p445_run_r2' "$MAP"
           ! grep -aFq 'A52_PHASE442_FIFO_FETCH_DISCRIMINATOR_V1' "$IMAGE"
           ccache -s
+      - name: P470-A1 strict post-link IPA/GSI module ABI and undefined-symbol audit (NO FLASH)
+        if: matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          bash scripts/470_a1_strict_modpost.sh \
+            "$PWD/gki/common" "$PWD/workspace/gki-phase199-out" \
+            "$PWD/workspace/p470-dataipa-donor" \
+            "$PWD/workspace/p470-vendor-kernel-headers" \
+            "$PWD/phase447-inventory"
+          echo "P470-A1 strict linked-kernel symbol ABI PASS, runtime not tested" >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve Phase446AF vmlinux for crash decoding
         if: success()
         run: |
@@ -1186,6 +1205,20 @@ jobs:
               | tee phase447b-variants/P461-FINAL-BOOT-ECC48-AUDIT.txt
             echo 'P467 MSS MANUAL G BOOT: ADSP sensors + MSS PAS4 RMTFS UIO, IPA/CDSP/ICNSS off; hardware unverified' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Upload P470-A1 hardware and strict Module.symvers diagnostics (NO FLASH)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A1-KERNEL-ABI-AND-HW-GATES-${{ github.run_number }}
+          path: |
+            phase447-inventory/P470-A1-HARDWARE-GATES.json
+            phase447-inventory/P470-A0-UNDEFINED-SYMBOLS.txt
+            phase447-inventory/P470-A1-STRICT-MODPOST.log
+            scripts/470_a1_strict_modpost.sh
+            scripts/470_a1_lagoon_hardware_gate.py
+            scripts/470_a1_lagoon_dataipa_config.h
+          if-no-files-found: warn
+          compression-level: 6
       - name: Upload P470 A0 source audit (NOT a flashable IPA build)
         if: always() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
