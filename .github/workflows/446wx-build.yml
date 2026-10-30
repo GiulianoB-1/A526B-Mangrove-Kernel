@@ -1669,6 +1669,24 @@ jobs:
           python3 scripts/470_a2_flashability_gate.py \
             --root "$ROOT" --build "$BUILD" \
             --report phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
+          # Preserve the P469b source boot exactly. The output is a real
+          # boot-v2 diagnostic candidate, still NOT authorized for first flash.
+          # The live phone DTBO idx1 and runtime tests remain independent gates.
+          gzip -n -9 -c "$BUILD/arch/arm64/boot/Image" \
+            > phase447-inventory/P470-A6-IPA-Image.gz
+          python3 scripts/38_repack_a52_p1_boot.py \
+            --source "$ORIGINAL_BOOT" \
+            --kernel phase447-inventory/P470-A6-IPA-Image.gz \
+            --output phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img \
+            --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
+          python3 scripts/470_a6_candidate_gate.py \
+            --baseline "$ORIGINAL_BOOT" \
+            --candidate phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img \
+            --image "$BUILD/arch/arm64/boot/Image" \
+            --config "$BUILD/.config" --system-map "$BUILD/System.map" \
+            --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+          sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
+          echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -1681,6 +1699,17 @@ jobs:
           PY
           echo 'P470-A3 built-in native Image link PASS, but PAS15/DTB/SSR/modem-ready NOT READY; NO FLASH' | tee -a "$LOG"
           echo 'P470-A3 native built-in Image link PASS. This is not a boot artifact and is not flashable.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload P470-A6 verified boot-v2 candidate for controlled first-flash REVIEW
+        if: success() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW-${{ github.run_number }}
+          path: |
+            phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img
+            phase447-inventory/P470-A6-BOOTV2-REPACK.json
+            phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+          if-no-files-found: error
+          compression-level: 1
       - name: Upload P470-A3 native built-in link diagnostics (NO IMAGE)
         if: always() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
@@ -1695,6 +1724,8 @@ jobs:
             phase447-inventory/P470-A5-LEGACY-BUS-VOTE-BLOCKER.json
             phase447-inventory/P470-A5-LIVE-FDT-ABI.json
             phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
+            phase447-inventory/P470-A6-BOOTV2-REPACK.json
+            phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
@@ -1704,5 +1735,6 @@ jobs:
             scripts/470_a5_bus_prearm_gate.py
             scripts/470_a5_live_ipa_audit.py
             scripts/470_a6_tg_msm_bus_votes.py
+            scripts/470_a6_candidate_gate.py
           if-no-files-found: warn
           compression-level: 6
