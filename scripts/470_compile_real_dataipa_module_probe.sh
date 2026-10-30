@@ -193,9 +193,24 @@ exact(single, ("#if defined(P470_A0_COMPILE_ONLY)\n"
                "\treturn -EOPNOTSUPP;\n"
                "#else\n" + single + "\n#endif"), n=4)
 
+# The feature ioctl is excluded with the missing pinned UAPI, so its
+# local value must also be guarded. Do not disable Werror to hide this.
+exact("\tu32 hw_feature_support = 0;",
+      "#if defined(IPA_IOC_GET_HW_FEATURE_SUPPORT) && defined(ETH_BRIDGING_SUPPORT)\n"
+      "\tu32 hw_feature_support = 0;\n#endif")
 ipa.write_text(c)
 print("P470 A0 IPA CORE COMPILE COMPAT: allocation check, optional UAPI, 64-bit DMA mask")
 print("P470 A0 HARD BLOCK: SCM protection/dump and SMMU CB fast/bypass not implemented")
+# ipa_nat.c uses dma_alloc_coherent and dma_free_coherent, whose header
+# in Linux 5.10 is dma-mapping.h. The removed dma-noncoherent.h import
+# has no other uses in this particular pinned source file.
+nat = p / "drivers/platform/msm/ipa/ipa_v3/ipa_nat.c"
+nat_src = nat.read_text()
+old_nat = "#include <linux/dma-noncoherent.h>"
+if nat_src.count(old_nat) != 1:
+    raise RuntimeError("P470 A0 NAT obsolete header anchor drift")
+nat.write_text(nat_src.replace(old_nat, "#include <linux/dma-mapping.h>", 1))
+print("P470 A0 NAT 5.10 COMPAT: coherent DMA header")
 
 print("P470 A0 external-module Kbuild wiring staged outside GKI")
 PY
