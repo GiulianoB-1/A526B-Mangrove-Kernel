@@ -32,7 +32,6 @@ struct a52_ssr_desc_abi {
     size_t shutdown;
     size_t state;
     size_t force_stop_bit;
-    size_t err_fatal_irq;
 };
 struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *caller);
 void a52_p470_ssr_desc_free(struct subsys_desc *desc);
@@ -55,19 +54,18 @@ struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *calle
         .shutdown = offsetof(struct subsys_desc, shutdown),
         .state = offsetof(struct subsys_desc, state),
         .force_stop_bit = offsetof(struct subsys_desc, force_stop_bit),
-        .err_fatal_irq = offsetof(struct subsys_desc, err_fatal_irq),
     };
 
     if (!caller)
         return ERR_PTR(-EINVAL);
-    pr_info("P470-A6b SSR ABI PAS size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu irq=%zu\n",
+    pr_info("P470-A6b SSR ABI PAS size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu\n",
             caller->size, caller->name, caller->dev, caller->owner,
             caller->powerup, caller->shutdown, caller->state,
-            caller->force_stop_bit, caller->err_fatal_irq);
-    pr_info("P470-A6b SSR ABI TG size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu irq=%zu\n",
+            caller->force_stop_bit);
+    pr_info("P470-A6b SSR ABI TG size=%zu name=%zu dev=%zu owner=%zu powerup=%zu shutdown=%zu state=%zu force=%zu\n",
             provider.size, provider.name, provider.dev, provider.owner,
             provider.powerup, provider.shutdown, provider.state,
-            provider.force_stop_bit, provider.err_fatal_irq);
+            provider.force_stop_bit);
     if (caller->size != provider.size ||
         caller->name != provider.name ||
         caller->dev != provider.dev ||
@@ -75,8 +73,7 @@ struct subsys_desc *a52_p470_ssr_desc_alloc(const struct a52_ssr_desc_abi *calle
         caller->powerup != provider.powerup ||
         caller->shutdown != provider.shutdown ||
         caller->state != provider.state ||
-        caller->force_stop_bit != provider.force_stop_bit ||
-        caller->err_fatal_irq != provider.err_fatal_irq) {
+        caller->force_stop_bit != provider.force_stop_bit) {
         pr_err("P470-A6b SSR ABI MISMATCH: refusing modem char shim\n");
         return ERR_PTR(-EPROTO);
     }
@@ -99,7 +96,6 @@ ABI_C = r'''{
         .shutdown = offsetof(struct subsys_desc, shutdown),
         .state = offsetof(struct subsys_desc, state),
         .force_stop_bit = offsetof(struct subsys_desc, force_stop_bit),
-        .err_fatal_irq = offsetof(struct subsys_desc, err_fatal_irq),
     }'''
 
 
@@ -147,7 +143,13 @@ def patch_pas(s):
         return -ENODEV;'''
     if s.count(old) != 2:
         raise RuntimeError(f"A6b MSS callback context anchor count {s.count(old)}")
-    s = s.replace(old, new, 2)
+    # The first callback still has "int ret" after container_of in P468.
+    # Reposition it before our guarded statements (kernel GNU89 discipline).
+    powerup_new = new.replace("struct qcom_adsp *adsp;\n",
+                              "struct qcom_adsp *adsp;\n    int ret;\n", 1)
+    s = once(s, old + "\n    int ret;", powerup_new,
+             "powerup declarations before executable statements")
+    s = once(s, old, new, "shutdown guarded context")
 
     anchor = '''    if (desc->a52_mss_rails) {
         struct subsys_desc *ssr = &adsp->a52_modem_ssr_desc;
@@ -211,7 +213,7 @@ def patch_pas(s):
     # Never print via the observed pointer; use the platform device.
     s = once(s,
              '        adsp->a52_modem_ssr = subsys_register(ssr);',
-             '''        dev_info(&pdev->dev,
+             r'''        dev_info(&pdev->dev,
                  "P470-A6b MSS DEV_CANARY before ok=%d\n",
                  READ_ONCE(adsp->dev) == &pdev->dev);
         if (READ_ONCE(adsp->dev) != &pdev->dev) {
@@ -303,7 +305,7 @@ def check(root):
         "provider_unit_allocation": True,
         "pas_ssr_descriptor_embedded": False,
         "layout_fields_compared": ["size","name","dev","owner","powerup",
-                                   "shutdown","state","force_stop_bit","err_fatal_irq"],
+                                   "shutdown","state","force_stop_bit"],
         "mss_probe_log_uses_platform_dev": True,
         "mss_dev_canary_before_after": True,
         "canary_corruption_unregister_free_restore": True,
