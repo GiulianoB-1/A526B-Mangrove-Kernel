@@ -107,7 +107,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1556,6 +1556,11 @@ jobs:
           test -s "$BUILD/vmlinux"
           test -s "$BUILD/arch/arm64/boot/Image"
           test -s "$BUILD/Module.symvers"
+          # Read the actual post-P468 boot-stage DTB. A failed static audit
+          # produces blockers, never silent FLASH approval.
+          python3 scripts/470_a4_dtb_audit.py \
+            --dtb "$PWD/phase447b-variants/P468-MSS-SUBSYS.dtb" \
+            --report "$PWD/phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json"
           python3 scripts/470_a3_stage_builtin.py \
             --root "$ROOT" \
             --donor "$PWD/workspace/p470-dataipa-donor" \
@@ -1632,6 +1637,7 @@ jobs:
           path: |
             phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
             phase447-inventory/P470-A4-ARM-MSS-READY.json
+            phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json
             phase447-inventory/P470-A3-BUILTIN-LINK.log
             phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
             scripts/470_a3_stage_builtin.py
