@@ -194,7 +194,7 @@ def transform_ipa(s):
 ''' + success, "PAS15 loaded success event")
     completion = '''\tcomplete_all(&ipa3_ctx->init_completion_obj);'''
     s = once(s, completion, '''\tif (of_machine_is_compatible("qcom,lagoon")) {
-\t\tif (WARN_ON_ONCE(!atomic_read(&p470_a4_pas15_loaded))) {
+\t\tif (!atomic_read(&p470_a4_pas15_loaded)) {
 \t\t\tpr_err("P470 IPA GSI READY blocked: PAS15 not loaded\\n");
 \t\t\treturn -EIO;
 \t\t}
