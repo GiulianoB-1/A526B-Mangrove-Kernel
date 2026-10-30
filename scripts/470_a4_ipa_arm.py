@@ -159,6 +159,28 @@ def transform_ipa(s):
              "struct ipa3_context *ipa3_ctx = NULL;\n" + HELPERS,
              "one-shot safety and API")
 
+    # A2c already validates every DIRECT page with iommu_iova_to_phys().
+    # Keep that error path, and record the *actual* positive translation
+    # and domain aperture rather than just reporting expected DT values.
+    direct_end = "    return 0;\n}\n\nstatic int p470_a2_get_s1_bypass("
+    direct_log = """    if (size) {
+        phys_addr_t actual = iommu_iova_to_phys(domain, fixed);
+        dev_info(dev,
+                 "P470 IPA SMMU cb=%s DIRECT iova_to_phys iova=%pa phys=%pa size=%pa\\n",
+                 cb, &fixed, &actual, &size);
+    }
+    dev_info(dev,
+             "P470 IPA SMMU cb=%s domain_type=%d force_aperture=%d aperture=[0x%llx..0x%llx]\\n",
+             cb, domain->type, domain->geometry.force_aperture,
+             (u64)domain->geometry.aperture_start,
+             (u64)domain->geometry.aperture_end);
+    return 0;
+}
+
+static int p470_a2_get_s1_bypass("""
+    s = once(s, direct_end, direct_log, "A2c positive DIRECT translation")
+
+
     # All paths (master IPA, CBs and SMP2P children) must defer before
     # touching hardware or setting up workqueues.
     anchor = '''\tpr_debug("ipa: IPA driver probing started for %s\\n",
@@ -246,6 +268,7 @@ def check(root):
         'return -EPROBE_DEFER;', 'device_reprobe(dev)',
         'P470 IPA ARM', 'P470 IPA PROBE',
         'P470 IPA FW_LOAD', 'P470 IPA GSI READY',
+        'DIRECT iova_to_phys iova=', 'force_aperture=%d aperture=',
         'complete_all(&p470_a4_ipa_ready);',
         'subsystem_get(sub_sys)',
         'strcmp(sub_sys, "lagoon_ipa_fws")',
