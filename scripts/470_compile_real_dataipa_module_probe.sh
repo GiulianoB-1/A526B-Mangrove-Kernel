@@ -233,5 +233,8 @@ make -C "$ROOT" O="$BUILD" ARCH=arm64 \
   M="$DONOR" \
   CONFIG_GSI=m CONFIG_IPA3=m CONFIG_RMNET_IPA3=y \
   KCFLAGS="-DP470_A0_COMPILE_ONLY=1 -DCONFIG_IPA3 -I$HEADERS/include -I$HEADERS/include/uapi -include $DONOR/config/dataipa.h" \
-  -j"$(nproc)" modules
+# Keep building independent driver objects after a compiler error. Kbuild still
+# exits nonzero on any error, preserving the strict compile gate, but the log
+# gathers more than a single missing kernel API per GitHub runner attempt.
+  -k -j"$(nproc)" modules
 echo "P470 A0 MODULE SOURCE COMPILE PASS (NOT A HARDWARE/IPA READY PASS)"
