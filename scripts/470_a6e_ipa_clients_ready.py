@@ -13,6 +13,7 @@ MARKER = "P470_A6E_REAL_CLIENTS_MANAGER_V1"
 IPA = Path("drivers/platform/msm/ipa/ipa_v3/ipa.c")
 RMNET = Path("drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c")
 QMI = Path("drivers/platform/msm/ipa/ipa_v3/ipa_qmi_service.c")
+MHI = Path("drivers/platform/msm/ipa/ipa_clients/ipa_mhi_client.c")
 MANAGER = Path("drivers/platform/msm/ipa/ipa_clients/ipa_clients_manager.c")
 CM_MAKE = Path("drivers/platform/msm/ipa/ipa_clients/Makefile")
 IPA_MAKE = Path("drivers/platform/msm/ipa/Makefile")
@@ -161,6 +162,20 @@ config IPA_CLIENTS_MANAGER
 
 \tif (rc < 0) {''', "actual async QMI server result")
     f.write_text(s)
+    # P470-A6e: the pinned donor expects a struct dentry return from
+    # debugfs_create_u32(), but the target 5.10 GKI API returns void.
+    # Call the helper directly; never fake success or cast its return type.
+    f = root / MHI
+    s = f.read_text()
+    s = once(s, '''\tfile = debugfs_create_u32("use_ipadma", read_write_mode, dent,
+\t\t&ipa_mhi_client_ctx->use_ipadma);
+\tif (!file || IS_ERR(file)) {
+\t\tIPA_MHI_ERR("fail to create file use_ipadma\\n");
+\t\tgoto fail;
+\t}''', '''\t/* P470-A6e: GKI 5.10 debugfs_create_u32 returns void. */
+\tdebugfs_create_u32("use_ipadma", read_write_mode, dent,
+\t\t&ipa_mhi_client_ctx->use_ipadma);''', "MHI debugfs_create_u32 void API")
+    f.write_text(s)
 
 def check(root):
     donor_check(root)
@@ -168,6 +183,7 @@ def check(root):
     ipa = (root / IPA).read_text()
     rmnet = (root / RMNET).read_text()
     qmi = (root / QMI).read_text()
+    mhi = (root / MHI).read_text()
     for marker, src in (
         (MARKER,cfg),
         ("config IPA_CLIENTS_MANAGER", cfg),
@@ -183,9 +199,12 @@ def check(root):
         ("P470 RMNET WAN_IOCTL rc=", rmnet),
         ("P470 RMNET NETDEV %s rc=", rmnet),
         ("P470 RMNET QMI server_register rc=", qmi),
+        ("P470-A6e: GKI 5.10 debugfs_create_u32 returns void.", mhi),
     ):
         if marker not in src:
             raise RuntimeError("P470-A6e missing diagnostic: "+marker)
+    if "file = debugfs_create_u32(" in mhi:
+        raise RuntimeError("P470-A6e stale MHI debugfs_create_u32 void assignment")
     return {"phase":"P470-A6e-REAL-IPA-CLIENTS-MANAGER",
             "donor_sha":"c560cc3c2840fb0ebc55ceef5b27549c66143637",
             "manager_aggregate":"ipa_clientsm.o",
