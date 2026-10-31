@@ -1,0 +1,86 @@
+name: "P472 A0 APR remote-pid and RX-intents pinned-source gate"
+run-name: "P472 A0 source gate: no Image, no ARM"
+on:
+  push:
+    branches:
+      - agent/p472-a0-aprv2-remote-pid-rx-intents-no-arm
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apr-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact TG APR and 5.10 GLINK source
+        run: |
+          set -Eeuo pipefail
+          mkdir -p workspace/tg/techpack/audio/ipc workspace/gki/drivers/rpmsg output
+          TG=6bf351bdf18bdb228db79e66f14a7a9c0178e5d7
+          GKI=f960ed27302b1ff8e61e152fc202554d778deccd
+          curl --fail --location --retry 4 --silent --show-error \
+            "https://raw.githubusercontent.com/micr0softstore/samsung_android_kernel_a52xq/$TG/techpack/audio/ipc/apr_tal_rpmsg.c" \
+            -o workspace/tg/techpack/audio/ipc/apr_tal_rpmsg.c
+          curl --fail --location --retry 4 --silent --show-error \
+            "https://android.googlesource.com/kernel/common/+/$GKI/drivers/rpmsg/qcom_glink_native.c?format=TEXT" \
+            | base64 --decode > workspace/gki/drivers/rpmsg/qcom_glink_native.c
+          sha256sum workspace/tg/techpack/audio/ipc/apr_tal_rpmsg.c \
+            workspace/gki/drivers/rpmsg/qcom_glink_native.c > output/SOURCE-SHA256.txt
+      - name: Apply strict P472 5.10 RPMSG adaptation
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/472_a0_apr_tal_remote_pid.py
+          python3 scripts/472_a0_apr_tal_remote_pid.py \
+            --tg workspace/tg \
+            --out output/apr_tal_rpmsg.c \
+            --report output/P472-A0-SOURCE-STATUS.json
+          python3 scripts/472_a0_apr_tal_remote_pid.py \
+            --tg workspace/tg \
+            --out output/apr_tal_rpmsg.c --check-only
+          diff -u workspace/tg/techpack/audio/ipc/apr_tal_rpmsg.c \
+            output/apr_tal_rpmsg.c > output/P472-A0-APR-TAL.diff || test $? -eq 1
+      - name: Validate exact 5.10 GLINK intent source
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          g = Path("workspace/gki/drivers/rpmsg/qcom_glink_native.c").read_text()
+          required = ("qcom_glink_announce_create", "qcom,intents",
+                      "qcom_glink_alloc_intent", "qcom_glink_advertise_intent")
+          missing = [x for x in required if x not in g]
+          start = g.find("static int qcom_glink_announce_create(")
+          stop = g.find("\nstatic ", start + 10)
+          body = g[start:stop] if start >= 0 and stop >= 0 else ""
+          if missing or "qcom,intents" not in body or "qcom_glink_advertise_intent" not in body:
+              raise SystemExit("P472 BLOCKED: exact GKI GLINK DT intents contract unproven: " + str(missing))
+          record = {
+             "pinned_gki": "f960ed27302b1ff8e61e152fc202554d778deccd",
+             "provider": "qcom_glink_native.c",
+             "source_supports_channel_intents_dt": True,
+             "dt_apr_requested": {"count": 20, "size": 512},
+             "actual_advertised_allocations": "UNVERIFIED until real boot",
+             "q6core_reply": "UNVERIFIED",
+             "image_link": "NOT ATTEMPTED",
+             "flash": "NOT AUTHORIZED"
+          }
+          Path("output/P472-INTENTS-PROVIDER-AUDIT.json").write_text(json.dumps(record, indent=2) + "\n")
+          print("P472 GLINK qcom,intents provider source PASS; runtime allocation UNVERIFIED")
+          PY
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### P472 A0 status"
+            echo "Pinned TG APR transport adapted to 5.10 remote-pid in a source artifact."
+            echo "No native APRv2/Q6CORE Image link or hardware response yet."
+            echo "Do not flash this artifact. P471 data remains untouched."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: P472-A0-SOURCE-ONLY-NO-FLASH
+          path: |
+            output/
+          if-no-files-found: warn
