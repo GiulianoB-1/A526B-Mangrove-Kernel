@@ -46,9 +46,21 @@ def patch_uart(s):
         raise RuntimeError("P473 existing Samsung compatible owner, cannot duplicate")
     s = s[:match.end()] + '\n\t{ .compatible = "qcom,msm-geni-serial-hs", }, /* P473 SE1 only */' + s[match.end():]
 
+    # TouchGrass labels the SE clock "se-clk", not the upstream "se".
+    # Retry only the missing-clock case, on this one Samsung-compatible
+    # device, while preserving deferred probe and all other failures.
+    clk_old = 'port->se.clk = devm_clk_get(&pdev->dev, "se");'
+    clk_new = '''port->se.clk = devm_clk_get(&pdev->dev, "se");
+\tif (IS_ERR(port->se.clk) &&
+\t    PTR_ERR(port->se.clk) == -ENOENT &&
+\t    of_device_is_compatible(pdev->dev.of_node,
+\t\t\t\t    "qcom,msm-geni-serial-hs"))
+\t\tport->se.clk = devm_clk_get(&pdev->dev, "se-clk");'''
+    s = replace_once(s, clk_old, clk_new, "Samsung SE1 se-clk fallback")
+
     # Do not request/remap the MMIO resource twice after the early probe
     # hardware-mode read, which would otherwise return EBUSY in config_port.
-    pat = r'(?P<ind>^\s*)uport->membase\s*=\s*devm_platform_ioremap_resource\(pdev,\s*0\);'
+    pat = r'(?P<ind>^[ \t]*)uport->membase\s*=\s*devm_platform_ioremap_resource\(pdev,\s*0\);'
     m = re.search(pat, s, re.M)
     if not m or s.count("devm_platform_ioremap_resource(pdev, 0)") != 1:
         raise RuntimeError("P473 native UART MMIO reservation function changed")
@@ -130,6 +142,8 @@ def patch_uart(s):
         raise RuntimeError("P473 native hardware gate is after TTY registration")
     if '"ttyHS"' not in s:
         raise RuntimeError("P473 5.10 real ttyHS UART device name missing")
+    if '"se-clk"' not in s:
+        raise RuntimeError("P473 TG SE clock fallback absent")
     return s
 
 def stage(root, tg):
