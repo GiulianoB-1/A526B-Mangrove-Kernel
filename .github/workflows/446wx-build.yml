@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P471-D1b TG flags/DFC/netfilter, Qualcomm core+ctl, NO ARM
+run-name: P473 B0 native TG BTPOWER and SE1 ttyHS0 / P471 retained
 on:
   push:
     branches:
@@ -32,6 +32,7 @@ on:
       - agent/p470a6g-lagoon47-boot-stats-no-arm
       - agent/p471-d1-datarmnet-core-ctl-no-arm
       - agent/p471-d1b-tg-flags-dfc-netfilter-audit-no-arm
+      - agent/p473-b0-se1-geni-fifo-btpower-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1706,9 +1707,19 @@ jobs:
             --root "$ROOT" --donor "$DATARMNET" \
             --report phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
           python3 scripts/471_d1_datarmnet_stage.py --root "$ROOT" --check-only
+          sha256sum "$ROOT/drivers/platform/msm/ipa/ipa_v3/ipa.c" \
+            "$ROOT/drivers/net/ethernet/qualcomm/rmnet_p471/rmnet_config.c" \
+            "$ROOT/drivers/remoteproc/qcom_q6v5_pas.c" \
+            > "$RUNNER_TEMP/p473-p471-unchanged.sha256"
+          python3 scripts/473_b0_native.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --report phase447-inventory/P473-B0-NATIVE-SOURCE.json
+          python3 scripts/473_b0_native.py --root "$ROOT" --check-only
+          sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL \
+            --enable P473_TG_HSUART --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 olddefconfig
@@ -1728,6 +1739,11 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
+          for feature in CONFIG_P473_TG_HSUART=y CONFIG_P473_TG_BTPOWER=y; do
+            grep -Fxq "$feature" "$BUILD/.config" || {
+              echo "::error title=P473::genuine TG UART or BTPOWER Kconfig refused::$feature"; exit 1;
+            }
+          done
           cp "$BUILD/.config" phase447-inventory/P471-D1-COMPILED.config
           python3 scripts/471_d1_tg_netfilter_audit.py \
             --root "$ROOT" \
@@ -1803,6 +1819,22 @@ jobs:
             }
           done
           python3 scripts/471_d1_datarmnet_stage.py --root "$ROOT" --check-only
+          python3 scripts/473_b0_native.py --root "$ROOT" --check-only
+          for marker in 'P473 UART ttyHS0 probe mode=' \
+                        'P473 UART ttyHS0 probe resources_on rc=' \
+                        'BT_CMD_PWR_CTRL'; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P473::real BTPOWER/SE1 marker absent from Image::$marker"; exit 1;
+            }
+          done
+          grep -Eq '[[:space:]]msm_geni_serial_probe$' "$BUILD/System.map" || {
+            echo "::error title=P473::TG HS UART driver absent from System.map"; exit 1;
+          }
+          grep -Eq '[[:space:]]bluetooth_power_init$' "$BUILD/System.map" || {
+            echo "::error title=P473::TG BTPOWER driver absent from System.map"; exit 1;
+          }
+          sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
+          echo 'P473 real TG Bluetooth/SE1 native code linked; HAL/FIFO/TTY hardware pending.' >> "$GITHUB_STEP_SUMMARY"
           echo 'P471-D1 linked native Qualcomm rmnet core + ctl, netlink/WWAN/GSI/packet real rc traces PASS; data call UNVERIFIED. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           python3 scripts/470_a6b_ssr_preprocessed_audit.py \
             --baseline-pas phase447-inventory/P470-A6B-P469B-PAS.i \
@@ -1904,11 +1936,11 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
+            --output phase447b-variants/MANGROVE-P473-B0-BTPOWER-SE1-NO-ARM.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
+            --candidate phase447b-variants/MANGROVE-P473-B0-BTPOWER-SE1-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
@@ -1917,7 +1949,7 @@ jobs:
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P473-B0-BTPOWER-SE1-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
@@ -1938,14 +1970,15 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P471-D1-DATARMNET-NO-ARM-${{ github.run_number }}
+          name: MANGROVE-P473-B0-BTPOWER-SE1-NO-ARM-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P473-B0-BTPOWER-SE1-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
             phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
             phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P473-B0-NATIVE-SOURCE.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
@@ -1987,6 +2020,7 @@ jobs:
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
             phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
             phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P473-B0-NATIVE-SOURCE.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
