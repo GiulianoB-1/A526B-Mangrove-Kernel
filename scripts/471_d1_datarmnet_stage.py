@@ -203,9 +203,20 @@ def patch_ipa(root):
              '\t\tipa_wan_ep_cfg, &rmnet_ipa3_ctx->apps_to_ipa3_hdl);\n'
              '\tp471_ipa_pipe_trace(ipa_wan_ep_cfg->client, rc);',
              "egress GSI result")
-    s = once(s, "static const struct net_device_ops ipa3_wwan_ops_ip = {",
-             NETDEV_WRAPPER + "static const struct net_device_ops ipa3_wwan_ops_ip = {",
-             "netdev ioctl wrapper")
+    # Extended IOCTL subtype must be logged with the actual return code.
+    # Initialize the subtype so a failed usercopy never logs stack garbage.
+    s = once(s,
+             "struct rmnet_ioctl_extended_s ext_ioctl_data;",
+             "struct rmnet_ioctl_extended_s ext_ioctl_data = { 0 };",
+             "extended ioctl zero-init")
+    s = once(s,
+             "\treturn rc;\n}\n\nstatic const struct net_device_ops ipa3_wwan_ops_ip = {",
+             '\tif (cmd == RMNET_IOCTL_EXTENDED)\n'
+             '\t\tpr_info("P471 WWAN_IOCTL cmd=EXTENDED/%u rc=%d\\n",\n'
+             '\t\t\text_ioctl_data.extended_ioctl, rc);\n'
+             '\treturn rc;\n}\n\n'
+             + NETDEV_WRAPPER + "static const struct net_device_ops ipa3_wwan_ops_ip = {",
+             "extended ioctl subtype with rc")
     s = once(s, "\t.ndo_do_ioctl = ipa3_wwan_ioctl,",
              "\t.ndo_do_ioctl = p471_wwan_ioctl_trace,", "netdev ioctl trace hook")
     s = once(s, "\tdev->stats.tx_packets++;\n\tdev->stats.tx_bytes += skb->len;",
