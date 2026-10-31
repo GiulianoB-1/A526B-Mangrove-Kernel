@@ -15,6 +15,7 @@ from pathlib import Path
 TAG = "P470_A6B_SSR_DESC_ABI_PROVIDER_V1"
 PAS = Path("drivers/remoteproc/qcom_q6v5_pas.c")
 SSR = Path("drivers/a52_pil/subsystem_restart.c")
+NOTIF = Path("drivers/a52_pil/subsystem_notif.c")
 HDR = Path("include/linux/a52_mss_ssr_abi.h")
 HEADER = r'''/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _LINUX_A52_MSS_SSR_ABI_H
@@ -118,10 +119,24 @@ def patch_ssr(s):
              '#include <linux/a52_mss_ssr_abi.h>\n'
              '#include <linux/err.h>\n'
              '#include <linux/slab.h>', "SSR canonical TG header and ABI includes")
+    # TG SSR calls send_early_notifications(), unlike the 5.10 API's
+    # subsys_send_early_notifications(). The GKI header has the wrong
+    # declaration; use the matching pinned TG header, do not add fake shims.
+    s = once(s, '#include <soc/qcom/subsystem_notif.h>',
+             '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"',
+             "SSR TG early-notifier declaration")
     s = once(s, 'struct subsys_device *subsys_register(struct subsys_desc *desc)',
              HELPER + '\nstruct subsys_device *subsys_register(struct subsys_desc *desc)',
              "SSR provider allocation before registration")
     return s
+
+
+def patch_notif(s):
+    # The TG notifier provider exports send_early_notifications();
+    # make its prototype identical to the TG SSR consumer, not GKI 5.10.
+    return once(s, '#include <soc/qcom/subsystem_notif.h>',
+                '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"',
+                "TG notifier provider canonical header")
 
 
 def patch_pas(s, root):
@@ -276,6 +291,7 @@ def patch_pas(s, root):
 def check(root):
     pas = (root / PAS).read_text()
     ssr = (root / SSR).read_text()
+    notif = (root / NOTIF).read_text()
     header = (root / HDR).read_text()
     tokens = (
         "P470-A6b SSR ABI PAS size=", "P470-A6b SSR ABI TG size=",
@@ -290,6 +306,16 @@ def check(root):
     canonical_include = '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"'
     if canonical_include not in pas or canonical_include not in ssr:
         raise RuntimeError("A6b PAS and SSR must both include EXACT TG legacy header")
+    tg_notif = '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"'
+    if tg_notif not in ssr or tg_notif not in notif:
+        raise RuntimeError("A6b TG notifier consumer/provider header mismatch")
+    if ('#include <soc/qcom/subsystem_notif.h>' in ssr or
+            '#include <soc/qcom/subsystem_notif.h>' in notif):
+        raise RuntimeError("A6b original GKI notification header still selected")
+    if "send_early_notifications(dev->early_notify)" not in ssr:
+        raise RuntimeError("A6b TG SSR legacy early-notifier call was changed")
+    if "void send_early_notifications(void *early_notif_handle)" not in notif:
+        raise RuntimeError("A6b TG notifier does not provide the legacy function")
     if '#include <soc/qcom/subsystem_restart.h>' in pas or '#include <soc/qcom/subsystem_restart.h>' in ssr:
         raise RuntimeError("A6b GKI/TG SSR header ambiguity remains")
     if "struct subsys_desc a52_modem_ssr_desc;" in pas:
@@ -320,6 +346,7 @@ def check(root):
         "phase": "P470-A6b-MSS-SSR-PROBE-OOPS",
         "source_layout_guard": True,
         "provider_unit_allocation": True,
+        "tg_early_notif_consumer_provider_header_consistent": True,
         "pas_ssr_descriptor_embedded": False,
         "layout_fields_compared": ["size","name","dev","owner","powerup",
                                    "shutdown","state","force_stop_bit","err_fatal_irq"],
@@ -349,6 +376,8 @@ def main():
         f.write_text(patch_ssr(f.read_text()))
         f = a.root / PAS
         f.write_text(patch_pas(f.read_text(), a.root))
+        f = a.root / NOTIF
+        f.write_text(patch_notif(f.read_text()))
     result = check(a.root)
     if a.report:
         a.report.parent.mkdir(parents=True, exist_ok=True)
