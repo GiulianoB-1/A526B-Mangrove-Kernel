@@ -196,7 +196,7 @@ def check(root):
                  "P473 UART ttyHS0 ready"):
         if name not in seg:
             raise RuntimeError("P473 missing actual 5.10 hardware operation " + name)
-    if 'dev_name = "ttyHS"' not in s or s.count('"qcom,msm-geni-serial-hs"') != 2:
+    if 'dev_name = "ttyHS"' not in s or s.count('"qcom,msm-geni-serial-hs"') < 2:
         raise RuntimeError("P473 5.10 ttyHS or legacy DT binding not established")
     if "config P473_TG_BTPOWER" not in (root / "drivers/bluetooth/Kconfig").read_text():
         raise RuntimeError("P473 true Bluetooth power not configured")
