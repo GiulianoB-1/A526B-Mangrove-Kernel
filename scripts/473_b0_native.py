@@ -170,6 +170,42 @@ def stage(root, tg):
         if name not in bt:
             raise RuntimeError("P473 TG ioctl ABI drift " + name)
 
+    # TG btfm_slim_slave.h declares these SOC IDs, but TG bluetooth-power.c
+    # imports that header ONLY with optional SLIM drivers configured. Native
+    # B0 does not select SLIM, so compile the identical constants locally.
+    # Verify the exact pinned TG values rather than inventing an ABI number.
+    hsp = {
+        "QCA_HSP_SOC_ID_0100": "0x400C0100",
+        "QCA_HSP_SOC_ID_0110": "0x400C0110",
+        "QCA_HSP_SOC_ID_0200": "0x400C0200",
+    }
+    slim_header = tg / "drivers/bluetooth/btfm_slim_slave.h"
+    if not slim_header.is_file():
+        raise RuntimeError("P473 pinned TG HSP SOC definitions missing")
+    slim_text = slim_header.read_text()
+    for symbol, value in hsp.items():
+        if not re.search(r"\\b" + symbol + r"\\s*=\\s*" + value + r"\\b", slim_text):
+            raise RuntimeError("P473 TG HSP SOC definition drift: " + symbol)
+        if bt.count(symbol) != 1:
+            raise RuntimeError("P473 unexpected HSP SOC identifier count: " + symbol)
+    bt_anchor = '#include <linux/fs.h>\n'
+    if bt.count(bt_anchor) != 1:
+        raise RuntimeError("P473 TG BTPOWER include anchor drift")
+    hsp_enum = (
+        "\n/* P473_B0_HSP_SOC_IDS_FROM_PINNED_TG_V1: original TG values.\n"
+        " * TG normally supplies these via btfm_slim_slave.h only for SLIM.\n"
+        " * The native B0 build has no SLIM provider; avoid a fake header.\n"
+        " */\n"
+        "#if !defined(CONFIG_BT_SLIM_QCA6390) && \\\n"
+        "    !defined(CONFIG_BTFM_SLIM_WCN3990)\n"
+        "enum {\n" +
+        "".join("\t" + symbol + " = " + value + ",\n"
+                for symbol, value in hsp.items()) +
+        "};\n"
+        "#endif\n"
+    )
+    bt = bt.replace(bt_anchor, bt_anchor + hsp_enum, 1)
+
     uart.write_text(patch_uart(uart.read_text()))
     (root / BT).write_text(bt)
     km, kc = root / "drivers/bluetooth/Makefile", root / "drivers/bluetooth/Kconfig"
@@ -203,12 +239,16 @@ def check(root):
     if "obj-$(CONFIG_P473_TG_BTPOWER) += bluetooth_power_p473.o" not in (root / "drivers/bluetooth/Makefile").read_text():
         raise RuntimeError("P473 Bluetooth power not linked")
     for name in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
-                 "BT_CMD_GETVAL_POWER_SRCS", '"btpower"'):
+                 "BT_CMD_GETVAL_POWER_SRCS", '"btpower"',
+                 "P473_B0_HSP_SOC_IDS_FROM_PINNED_TG_V1",
+                 "QCA_HSP_SOC_ID_0100 = 0x400C0100",
+                 "QCA_HSP_SOC_ID_0110 = 0x400C0110",
+                 "QCA_HSP_SOC_ID_0200 = 0x400C0200"):
         if name not in bt:
             raise RuntimeError("P473 real BTPOWER missing " + name)
     return {
         "phase": "P473-B0-NATIVE-V2", "TG_revision": TG_SHA,
-        "btpower": "unchanged pinned TouchGrass vendor source",
+        "btpower": "pinned TG source plus exact HSP identifiers for non-SLIM config",
         "uart": "actual 5.10 qcom_geni_serial.c plus SE1-only hardware gate",
         "owner": "existing ttyHS UART, no duplicate driver",
         "fifo_reg": "MMIO 0x64 bit0, read only after ICC/clock enable",
