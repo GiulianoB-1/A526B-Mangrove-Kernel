@@ -197,6 +197,46 @@ def patch_core(target):
             raise RuntimeError("P471 lost donor netlink ABI: " + token)
     file.write_text(s)
 
+    # Qualcomm's pinned donor uses newer netlink policy identifiers and
+    # time_t for a nanosecond counter. GKI 5.10 lacks NLA_EXACT_LEN and
+    # kernel time_t. Keep the original EXACT length requirement by using
+    # NLA_BINARY plus explicit checks in both netlink request handlers.
+    genl = target / "rmnet_genl.c"
+    gs = genl.read_text()
+    gs = once(
+        gs,
+        "[RMNET_CORE_GENL_ATTR_PID_BPS] = { .type = NLA_EXACT_LEN",
+        "[RMNET_CORE_GENL_ATTR_PID_BPS] = { .type = NLA_BINARY",
+        "P471 GENL BPS nla_policy",
+    )
+    gs = once(
+        gs,
+        "[RMNET_CORE_GENL_ATTR_PID_BOOST] = { .type = NLA_EXACT_LEN",
+        "[RMNET_CORE_GENL_ATTR_PID_BOOST] = { .type = NLA_BINARY",
+        "P471 GENL BOOST nla_policy",
+    )
+    gs = once(gs, "time_t timstamp_last_query;", "u64 timstamp_last_query;",
+              "P471 GENL ns timestamp")
+    gs = once(
+        gs,
+        "\t\tna = info->attrs[RMNET_CORE_GENL_ATTR_PID_BPS];\n\t\tif (na) {",
+        "\t\tna = info->attrs[RMNET_CORE_GENL_ATTR_PID_BPS];\n"
+        "\t\tif (na) {\n"
+        "\t\t\tif (nla_len(na) != sizeof(struct rmnet_core_pid_bps_resp))\n"
+        "\t\t\t\treturn -EINVAL;",
+        "P471 GENL BPS exact length",
+    )
+    gs = once(
+        gs,
+        "\tna = info->attrs[RMNET_CORE_GENL_ATTR_PID_BOOST];\n\tif (na) {",
+        "\tna = info->attrs[RMNET_CORE_GENL_ATTR_PID_BOOST];\n"
+        "\tif (na) {\n"
+        "\t\tif (nla_len(na) != sizeof(struct rmnet_core_pid_boost_req))\n"
+        "\t\t\treturn -EINVAL;",
+        "P471 GENL BOOST exact length",
+    )
+    genl.write_text(gs)
+
 def patch_ipa(root):
     p = root / RMNET
     s = p.read_text()
@@ -302,6 +342,18 @@ def check(root):
     if 'obj-$(CONFIG_P471_RMNET_CORE) += rmnet_p471/' not in mk:
         raise RuntimeError("P471 core not linked")
     # Fail before any expensive compile if Kbuild would override Makefile.
+    genl = (core / "rmnet_genl.c").read_text()
+    for required in (
+        "[RMNET_CORE_GENL_ATTR_PID_BPS] = { .type = NLA_BINARY",
+        "[RMNET_CORE_GENL_ATTR_PID_BOOST] = { .type = NLA_BINARY",
+        "nla_len(na) != sizeof(struct rmnet_core_pid_bps_resp)",
+        "nla_len(na) != sizeof(struct rmnet_core_pid_boost_req)",
+        "u64 timstamp_last_query;",
+    ):
+        if required not in genl:
+            raise RuntimeError("P471 missing GKI5.10 GENL compatibility: " + required)
+    if "NLA_EXACT_LEN" in genl or "time_t timstamp_last_query;" in genl:
+        raise RuntimeError("P471 donor GENL compatibility patch incomplete")
     build_desc = (core / "Kbuild").read_text()
     if build_desc != (core / "Makefile").read_text():
         raise RuntimeError("P471 active Kbuild differs from Makefile")
