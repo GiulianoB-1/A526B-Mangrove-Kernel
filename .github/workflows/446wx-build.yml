@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A6e real IPA clients manager and FMWK/RMNET/QMI readiness, NO ARM
+run-name: P470-A6f IPA4.7 TG parity, QMI INIT_MODEM full trace, no BUG, NO ARM
 on:
   push:
     branches:
@@ -28,6 +28,7 @@ on:
       - agent/p470a6c-ipa-notifier-tg-abi-audit-no-arm
       - agent/p470a6d-ipa-smmu-cb-fw-loader-no-arm
       - agent/p470a6e-ipa-clients-ready-rmnet-qmi-no-arm
+      - agent/p470a6f-qmi-ipa47-tg-parity-failclosed-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
