@@ -108,7 +108,7 @@ def patch(s):
 \t\tpr_info("P470 IPA SMMU_CB max=%u source=property platform=%u\\n",
 \t\t\tipa_drv_res->max_num_smmu_cb,
 \t\t\tipa_drv_res->platform_type);
-\t} else if (!of_find_property(pdev->dev.of_node,
+\t} else if (of_machine_is_compatible("qcom,lagoon") &&\n\t\t   !of_find_property(pdev->dev.of_node,
 \t\t\t\t     "qcom,max_num_smmu_cb", NULL) &&
 \t\t   of_property_read_bool(pdev->dev.of_node, "qcom,arm-smmu")) {
 \t\tint count = p470_a6d_available_smmu_cbs(pdev->dev.of_node);
