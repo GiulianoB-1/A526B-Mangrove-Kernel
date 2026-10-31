@@ -47,6 +47,10 @@ def files_from_donor(donor, target):
                     "obj-$(CONFIG_P471_RMNET_CORE) += rmnet_core.o")
     mk = mk.replace("obj-m += rmnet_ctl.o",
                     "obj-$(CONFIG_P471_RMNET_CTL) += rmnet_ctl.o")
+    # The kernel selects Kbuild in preference to Makefile if both exist.
+    # The donor ships Kbuild with obj-m directives; writing only Makefile
+    # silently produces an empty built-in.a and misses all rmnet markers.
+    (target / "Kbuild").write_text(mk)
     (target / "Makefile").write_text(mk)
     (target / "Kconfig").write_text(
         'config P471_RMNET_CORE\n'
@@ -275,8 +279,17 @@ def check(root):
         raise RuntimeError("P471 Kconfig not reachable")
     if 'obj-$(CONFIG_P471_RMNET_CORE) += rmnet_p471/' not in mk:
         raise RuntimeError("P471 core not linked")
-    if "obj-$(CONFIG_P471_RMNET_CTL) += rmnet_ctl.o" not in (core / "Makefile").read_text():
-        raise RuntimeError("P471 ctl link missing")
+    # Fail before any expensive compile if Kbuild would override Makefile.
+    build_desc = (core / "Kbuild").read_text()
+    if build_desc != (core / "Makefile").read_text():
+        raise RuntimeError("P471 active Kbuild differs from Makefile")
+    for need in ("obj-$(CONFIG_P471_RMNET_CORE) += rmnet_core.o",
+                 "obj-$(CONFIG_P471_RMNET_CTL) += rmnet_ctl.o",
+                 "qmi_rmnet.o", "wda_qmi.o", "dfc_qmi.o", "dfc_qmap.o"):
+        if need not in build_desc:
+            raise RuntimeError("P471 missing built-in Kbuild entry: " + need)
+    if "obj-m += rmnet_core.o" in build_desc or "obj-m += rmnet_ctl.o" in build_desc:
+        raise RuntimeError("P471 stale donor module Kbuild, built-in would be empty")
     return {
         "phase": "P471-D1-DATARMNET",
         "donor_sha": DONOR_SHA, "donor_provider": "Qualcomm datarmnet core+ctl",
