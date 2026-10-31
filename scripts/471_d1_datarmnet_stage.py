@@ -208,14 +208,16 @@ def patch_ipa(root):
              "netdev ioctl wrapper")
     s = once(s, "\t.ndo_do_ioctl = ipa3_wwan_ioctl,",
              "\t.ndo_do_ioctl = p471_wwan_ioctl_trace,", "netdev ioctl trace hook")
-    s = once(s, "\tdev->stats.tx_packets++;",
+    s = once(s, "\tdev->stats.tx_packets++;\n\tdev->stats.tx_bytes += skb->len;",
              '\tdev->stats.tx_packets++;\n'
+             '\tdev->stats.tx_bytes += skb->len;\n'
              '\tif (dev->stats.tx_packets == 1)\n'
              '\t\tpr_info("P471 RMNET PACKET first_tx dev=%s tx_packets=%lu tx_bytes=%lu\\n",\n'
              '\t\t\tdev->name, dev->stats.tx_packets, dev->stats.tx_bytes);',
              "first TX")
-    s = once(s, "\t\tdev->stats.rx_packets++;",
+    s = once(s, "\t\tdev->stats.rx_packets++;\n\t\tdev->stats.rx_bytes += packet_len;",
              '\t\tdev->stats.rx_packets++;\n'
+             '\t\tdev->stats.rx_bytes += packet_len;\n'
              '\t\tif (dev->stats.rx_packets == 1)\n'
              '\t\t\tpr_info("P471 RMNET PACKET first_rx dev=%s rx_packets=%lu rx_bytes=%lu\\n",\n'
              '\t\t\t\tdev->name, dev->stats.rx_packets, dev->stats.rx_bytes);',
