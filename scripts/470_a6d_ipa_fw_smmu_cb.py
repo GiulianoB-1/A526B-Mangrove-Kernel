@@ -67,10 +67,18 @@ def once(s, old, new, name):
     return s.replace(old, new, 1)
 
 def section(s, start, end):
-    if s.count(start) != 1 or s.count(end) != 1:
-        raise RuntimeError(f"P470-A6d cannot isolate function {start}")
+    # The donor has an early ipa3_plat_drv_shutdown() prototype AND the
+    # later definition. Bound the region by the FIRST match after start.
+    # Never require the end anchor to be globally unique.
+    if s.count(start) != 1:
+        raise RuntimeError(f"P470-A6d ambiguous function {start}: "
+                           f"matches={s.count(start)}")
     a = s.index(start)
-    b = s.index(end, a)
+    b = s.find(end, a + len(start))
+    if b < 0:
+        raise RuntimeError(f"P470-A6d missing definition after {start}: {end}")
+    if s.find(end, b + len(end)) >= 0:
+        raise RuntimeError(f"P470-A6d ambiguous function boundary after {start}")
     return s[a:b]
 
 def patch(s):
