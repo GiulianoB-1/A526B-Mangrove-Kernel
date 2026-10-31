@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A6g Lagoon IPA4.7 TG boot-stat isolation, no ARM
+run-name: P471-D1 mobile data vendor rmnet core+ctl, A6g preserved, NO ARM
 on:
   push:
     branches:
@@ -30,6 +30,7 @@ on:
       - agent/p470a6e-ipa-clients-ready-rmnet-qmi-no-arm
       - agent/p470a6f-qmi-ipa47-tg-parity-failclosed-no-arm
       - agent/p470a6g-lagoon47-boot-stats-no-arm
+      - agent/p471-d1-datarmnet-core-ctl-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -116,7 +117,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py
+          python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py scripts/471_d1_datarmnet_stage.py
           python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py scripts/470_a6d_ipa_fw_smmu_cb.py scripts/470_a6e_ipa_clients_ready.py scripts/470_a6e_map_initcall_audit.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
@@ -1692,8 +1693,21 @@ jobs:
             --report phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
           python3 scripts/470_a6g_ipa47_stats_tg.py \
             --root "$ROOT" --tg "$PWD/workspace/touchgrass-a52xq" --check-only
+          # P471 D1: pin a compatible Qualcomm 5.10 datarmnet core+ctl,
+          # preserving A6f/A6g and P469B; do not load vendor 5.4 .ko.
+          DATARMNET="$PWD/workspace/p471-datarmnet-donor"
+          git clone --quiet --no-checkout \
+            https://github.com/CodeLinaro-mirror/la_platform_vendor_qcom_opensource_datarmnet.git "$DATARMNET"
+          git -C "$DATARMNET" fetch --quiet --depth=1 origin 1b77da7ced0ac746fca93df5c6c01528164ab6cc
+          git -C "$DATARMNET" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$DATARMNET" rev-parse HEAD)" = 1b77da7ced0ac746fca93df5c6c01528164ab6cc
+          python3 scripts/471_d1_datarmnet_stage.py \
+            --root "$ROOT" --donor "$DATARMNET" \
+            --report phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+          python3 scripts/471_d1_datarmnet_stage.py --root "$ROOT" --check-only
           "$ROOT/scripts/config" --file "$BUILD/.config" \
-            --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA
+            --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 olddefconfig
@@ -1703,6 +1717,17 @@ jobs:
               exit 1
             }
           done
+          for feature in CONFIG_P471_RMNET_CORE=y CONFIG_P471_RMNET_CTL=y; do
+            grep -Fxq "$feature" "$BUILD/.config" || {
+              echo "::error title=P471 vendor rmnet Kconfig rejected::$feature"
+              exit 1
+            }
+          done
+          if grep -Fxq 'CONFIG_RMNET=y' "$BUILD/.config" || grep -Fxq 'CONFIG_RMNET=m' "$BUILD/.config"; then
+            echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
+            exit 1
+          fi
+          cp "$BUILD/.config" phase447-inventory/P471-D1-COMPILED.config
           # A6 was compiled immediately above: only the A6b fix changes
           # before this second, incremental native Image link.
           # Preserve P470-A6 #678 and A6b vmlinux separately.
@@ -1758,7 +1783,19 @@ jobs:
           done
           python3 scripts/470_a6g_ipa47_stats_tg.py \
             --root "$ROOT" --tg "$PWD/workspace/touchgrass-a52xq" --check-only
-          echo 'P470-A6g Lagoon IPA47 TG drop boot skip, experimental FnR skip, TG-identical quota/teth builders with write mask traces LINK PASS. Hardware PENDING.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P470-A6g preserved: modem INIT_MODEM accepted on hardware, LTE registered and no endp23 assert.' >> "$GITHUB_STEP_SUMMARY"
+          for marker in "P471 RMNET LINK add name=" \
+                        "P471 WWAN_IOCTL cmd=" \
+                        "P471 IPA PIPE setup client=" \
+                        "P471 RMNET PACKET first_tx" \
+                        "P471 RMNET PACKET first_rx"; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P471 linked Image missing actual provider/IPA data trace::$marker"
+              exit 1
+            }
+          done
+          python3 scripts/471_d1_datarmnet_stage.py --root "$ROOT" --check-only
+          echo 'P471-D1 linked native Qualcomm rmnet core + ctl, netlink/WWAN/GSI/packet real rc traces PASS; data call UNVERIFIED. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           python3 scripts/470_a6b_ssr_preprocessed_audit.py \
             --baseline-pas phase447-inventory/P470-A6B-P469B-PAS.i \
             --baseline-ssr phase447-inventory/P470-A6B-P469B-SSR.i \
@@ -1859,21 +1896,21 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P470-A6G-STATS-TG47-NO-ARM.boot.img \
+            --output phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P470-A6G-STATS-TG47-NO-ARM.boot.img \
+            --candidate phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
-          cp "$BUILD/vmlinux" phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.vmlinux
-          cp "$BUILD/System.map" phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.System.map
-          readelf -SW phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.vmlinux | grep -F .debug_info
-          sha256sum phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.vmlinux \
-                    phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P470-A6G-STATS-TG47-NO-ARM.boot.img \
-            > phase447-inventory/P470-A6G-STATS-TG47-CANDIDATE-SYMBOLS.sha256
+          cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
+          cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
+          readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
+          sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
+                    phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
+                    phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img \
+            > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -1893,16 +1930,19 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P470-A6G-STATS-TG47-NO-ARM-${{ github.run_number }}
+          name: MANGROVE-P471-D1-DATARMNET-NO-ARM-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P470-A6G-STATS-TG47-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P471-D1-DATARMNET-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
             phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
-            phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.vmlinux
-            phase447b-variants/P470-A6G-STATS-TG47-CANDIDATE.System.map
-            phase447-inventory/P470-A6G-STATS-TG47-CANDIDATE-SYMBOLS.sha256
+            phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P471-D1-COMPILED.config
+            docs/p471-d0-mobile-data-provider-abi-audit.md
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
+            phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           if-no-files-found: error
           compression-level: 1
       - name: Upload P470-A6b #678 source-equivalent DWARF forensic rebuild (NO FLASH)
@@ -1936,6 +1976,9 @@ jobs:
             phase447-inventory/P470-A6E-MANAGER-INITCALL-MAP.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
             phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
+            phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P471-D1-COMPILED.config
+            docs/p471-d0-mobile-data-provider-abi-audit.md
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-ABI.json
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
             phase447-inventory/P470-A6C-CPP-REAL-COMPILER.json
@@ -1959,6 +2002,7 @@ jobs:
             scripts/470_a6e_map_initcall_audit.py
             scripts/470_a6f_qmi_tg_parity.py
             scripts/470_a6g_ipa47_stats_tg.py
+            scripts/471_d1_datarmnet_stage.py
             scripts/470_a6c_notifier_preprocess_audit.py
             scripts/470_a6c_kbuild_cpp_replay.py
           if-no-files-found: warn
