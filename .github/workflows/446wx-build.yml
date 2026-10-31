@@ -1677,14 +1677,17 @@ jobs:
           python3 scripts/470_a6e_ipa_clients_ready.py --root "$ROOT" \
             --report phase447-inventory/P470-A6E-CLIENTS-SOURCE.json
           python3 scripts/470_a6e_ipa_clients_ready.py --root "$ROOT" --check-only
-          "$ROOT/scripts/config" --file "$BUILD/.config" --enable IPA_CLIENTS_MANAGER
+          "$ROOT/scripts/config" --file "$BUILD/.config" \
+            --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 olddefconfig
-          grep -Fxq CONFIG_IPA_CLIENTS_MANAGER=y "$BUILD/.config" || {
-            echo "::error title=P470-A6e IPA clients manager refused by Kconfig"
-            exit 1
-          }
+          for feature in CONFIG_IPA_CLIENTS_MANAGER=y CONFIG_RNDIS_IPA=y; do
+            grep -Fxq "$feature" "$BUILD/.config" || {
+              echo "::error title=P470-A6e real IPA client dependency refused by Kconfig::$feature"
+              exit 1
+            }
+          done
           # A6 was compiled immediately above: only the A6b fix changes
           # before this second, incremental native Image link.
           # Preserve P470-A6 #678 and A6b vmlinux separately.

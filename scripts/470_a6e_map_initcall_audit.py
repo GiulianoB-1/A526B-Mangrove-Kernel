@@ -11,6 +11,10 @@ REQUIRED = (
     "ipa3_register_to_fmwk",
     "ipa_fmwk_register_ipa",
     "ipa3_ready_cb",
+    "rndis_ipa_init",
+    "rndis_ipa_cleanup",
+    "rndis_ipa_pipe_connect_notify",
+    "rndis_ipa_pipe_disconnect_notify",
 )
 INITCALLS = {
     "ipa_module_init": "ipa_module_init4",
@@ -46,6 +50,8 @@ def main():
     for obj in (
         "drivers/platform/msm/ipa/ipa_clients/ipa_clientsm.o",
         "drivers/platform/msm/ipa/ipa_clients/ipa_clients_manager.o",
+        "drivers/platform/msm/ipa/ipa_clients/rndisipam.o",
+        "drivers/platform/msm/ipa/ipa_clients/rndis_ipa.o",
     ):
         if not (a.build / obj).is_file():
             raise RuntimeError("P470-A6e missing built-in client object "+obj)
@@ -55,6 +61,7 @@ def main():
         "subsys_initcalls":init,
         "core_initcall_before_clients_initcall":True,
         "ipa_clients_manager_present_in_native_system_map":True,
+        "real_rndis_ipa_builtin_and_symbols_present":True,
         "qmi_service_runtime_started":False,
         "hardware_stability_unverified":True,
         "ipa_disarmed_default":True,

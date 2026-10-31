@@ -14,6 +14,9 @@ IPA = Path("drivers/platform/msm/ipa/ipa_v3/ipa.c")
 RMNET = Path("drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c")
 QMI = Path("drivers/platform/msm/ipa/ipa_v3/ipa_qmi_service.c")
 MHI = Path("drivers/platform/msm/ipa/ipa_clients/ipa_mhi_client.c")
+RNDIS = Path("drivers/platform/msm/ipa/ipa_clients/rndis_ipa.c")
+RNDIS_TRACE = Path("drivers/platform/msm/ipa/ipa_clients/rndis_ipa_trace.h")
+FEATURES = Path("include/linux/p470_lagoon_dataipa_config.h")
 MANAGER = Path("drivers/platform/msm/ipa/ipa_clients/ipa_clients_manager.c")
 CM_MAKE = Path("drivers/platform/msm/ipa/ipa_clients/Makefile")
 IPA_MAKE = Path("drivers/platform/msm/ipa/Makefile")
@@ -36,6 +39,11 @@ def donor_check(root):
        "obj-y += ipa_v3/ ipa_clients/" not in mk or \
        mk.index("obj-$(CONFIG_IPA3) += ipam.o") > mk.index("obj-y += ipa_v3/ ipa_clients/"):
         raise RuntimeError("P470-A6e: donor IPA make order changed")
+    if "obj-$(CONFIG_RNDIS_IPA) += rndisipam.o" not in cm or \
+       "rndisipam-objs := rndis_ipa.o" not in cm:
+        raise RuntimeError("P470-A6e: pinned RNDIS helper Kbuild changed")
+    if "#define CONFIG_RNDIS_IPA 1" not in (root / FEATURES).read_text():
+        raise RuntimeError("P470-A6e: Lagoon RNDIS feature/header contract changed")
     if "obj-$(CONFIG_IPA_CLIENTS_MANAGER) += ipa_clientsm.o" not in cm or \
        "ipa_clientsm-objs := " + COMPOSITE not in cm:
         raise RuntimeError("P470-A6e: donor composite IPA clientsm.o changed")
@@ -68,6 +76,16 @@ config IPA_CLIENTS_MANAGER
     help
       Build the complete pinned donor ipa_clientsm.o, after ipam.o.
       This does not enable IPA hardware by default.
+
+# P470-A6e: Lagoon feature header defines CONFIG_RNDIS_IPA=1,
+# so ipa_usb.o needs real rndis_ipa_* symbols in native Kbuild.
+config RNDIS_IPA
+    bool "Real dataipa USB RNDIS helper (P470-A6e)"
+    depends on IPA_CLIENTS_MANAGER
+    default n
+    help
+      Build the pinned donor rndisipam.o, matching Lagoon feature flags.
+      This does not arm IPA.
 """)
     f = root / IPA
     s = f.read_text()
@@ -176,6 +194,35 @@ config IPA_CLIENTS_MANAGER
 \tdebugfs_create_u32("use_ipadma", read_write_mode, dent,
 \t\t&ipa_mhi_client_ctx->use_ipadma);''', "MHI debugfs_create_u32 void API")
     f.write_text(s)
+    # P470-A6e real RNDIS: match Lagoon C feature with native Kbuild.
+    f = root / RNDIS_TRACE
+    s = f.read_text()
+    s = once(s, "#define TRACE_INCLUDE_PATH ../../techpack/dataipa/drivers/platform/msm/ipa/ipa_clients",
+             "#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_clients",
+             "native RNDIS trace include root")
+    f.write_text(s)
+    f = root / RNDIS
+    s = f.read_text()
+    # GKI 5.10 debugfs_create_{bool,u8,u32} returns void. Convert
+    # only scalar helpers, preserving real debugfs_create_file checks.
+    scalar_pattern = re.compile(
+        r'\tfile = debugfs_create_(?:bool|u8|u32)\s*\([^;]*?\);'
+        r'\n\tif \(!file\) \{\n\t\tRNDIS_IPA_ERROR\("[^"\n]+\\n"\);'
+        r'\n\t\tgoto fail_file;\n\t\}')
+    hits = list(scalar_pattern.finditer(s))
+    if len(hits) != 19:
+        raise RuntimeError(f"P470-A6e RNDIS scalar debugfs anchors={len(hits)}")
+    def replace_scalar(m):
+        call = m.group(0).split(';\n\tif (!file) {', 1)[0]
+        return call.replace('\tfile = ', '\t', 1) + ';'
+    s = scalar_pattern.sub(replace_scalar, s)
+    if re.search(r'\bfile = debugfs_create_(?:bool|u8|u32)\s*\(', s):
+        raise RuntimeError("P470-A6e stale RNDIS scalar debugfs assignment")
+    s = once(s, 'static void rndis_ipa_debugfs_init(struct rndis_ipa_dev *rndis_ipa_ctx)\n{',
+             '/* P470-A6e: GKI 5.10 debugfs scalar helper return ABI. */\n'
+             'static void rndis_ipa_debugfs_init(struct rndis_ipa_dev *rndis_ipa_ctx)\n{',
+             "RNDIS debugfs ABI marker")
+    f.write_text(s)
 
 def check(root):
     donor_check(root)
@@ -184,6 +231,8 @@ def check(root):
     rmnet = (root / RMNET).read_text()
     qmi = (root / QMI).read_text()
     mhi = (root / MHI).read_text()
+    rndis = (root / RNDIS).read_text()
+    rndis_trace = (root / RNDIS_TRACE).read_text()
     for marker, src in (
         (MARKER,cfg),
         ("config IPA_CLIENTS_MANAGER", cfg),
@@ -200,14 +249,21 @@ def check(root):
         ("P470 RMNET NETDEV %s rc=", rmnet),
         ("P470 RMNET QMI server_register rc=", qmi),
         ("P470-A6e: GKI 5.10 debugfs_create_u32 returns void.", mhi),
+        ("P470-A6e: GKI 5.10 debugfs scalar helper return ABI.", rndis),
+        ("#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_clients", rndis_trace),
+        ("config RNDIS_IPA", cfg),
     ):
         if marker not in src:
             raise RuntimeError("P470-A6e missing diagnostic: "+marker)
     if "file = debugfs_create_u32(" in mhi:
         raise RuntimeError("P470-A6e stale MHI debugfs_create_u32 void assignment")
+    if re.search(r"\bfile = debugfs_create_(?:bool|u8|u32)\s*\(", rndis):
+        raise RuntimeError("P470-A6e stale RNDIS debugfs scalar assignment")
     return {"phase":"P470-A6e-REAL-IPA-CLIENTS-MANAGER",
             "donor_sha":"c560cc3c2840fb0ebc55ceef5b27549c66143637",
             "manager_aggregate":"ipa_clientsm.o",
+            "rndis_helper_aggregate":"rndisipam.o",
+            "rndis_debugfs_scalar_adapted":19,
             "manager_members":COMPOSITE.split(),
             "kbuild_ipa_before_clients":True,
             "initcall_level":"subsys",
