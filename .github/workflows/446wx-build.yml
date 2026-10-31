@@ -1701,20 +1701,37 @@ jobs:
             --a6b-ssr "$BUILD/drivers/a52_pil/subsystem_restart.i" \
             --out phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
           # All built IPA/GSI/RMNET translation units, including RMNET itself.
+          # Kbuild recursively rebuilds parent directories for each .i
+          # goal. A concurrent multi-goal make can race itself and fail with
+          # "No rule to make target". Build exactly one .i per invocation.
           mapfile -t NOTIF_TUS < <(
             find "$BUILD/drivers/platform/msm" -type f -name '*.o' -print |
-              sed "s|^$BUILD/||; s|\\.o$|.i|" | sort -u
+              sed "s|^$BUILD/||; s|\\.o$|.i|" | sort -u |
+              while IFS= read -r target; do
+                test -f "$ROOT/${target%.i}.c" && printf '%s\n' "$target"
+              done
           )
           test "${#NOTIF_TUS[@]}" -ge 3
-          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
-            LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
-            drivers/remoteproc/remoteproc_core.i \
-            drivers/a52_pil/subsystem_notif.i \
-            "${NOTIF_TUS[@]}" > phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log 2>&1 || {
-              cat phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+          printf '%s\n' "drivers/remoteproc/remoteproc_core.i" \
+            "drivers/a52_pil/subsystem_notif.i" "${NOTIF_TUS[@]}" |
+            sort -u > phase447-inventory/P470-A6C-PREPROCESS-TARGETS.txt
+          : > phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+          while IFS= read -r tu; do
+            echo "P470-A6c CPP single target: $tu" |
+              tee -a phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+            if ! make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+              LLVM=1 LLVM_IAS=1 -j1 "$tu" \
+              >> phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log 2>&1; then
+              echo "::error title=P470-A6c preprocessed TU failed::$tu"
+              tail -n 100 phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+              exit 1
+            fi
+            test -s "$BUILD/$tu" || {
+              echo "::error title=P470-A6c expected .i missing::$tu"
               exit 1
             }
+          done < phase447-inventory/P470-A6C-PREPROCESS-TARGETS.txt
           python3 scripts/470_a6c_notifier_preprocess_audit.py \
             --root "$ROOT" --build "$BUILD" \
             --out phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-ABI.json
@@ -1836,6 +1853,7 @@ jobs:
             phase447-inventory/P470-A6C-NOTIFIER-SOURCE-ROUTE.json
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-ABI.json
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+            phase447-inventory/P470-A6C-PREPROCESS-TARGETS.txt
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
