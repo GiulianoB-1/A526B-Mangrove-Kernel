@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 
 CORE = Path("drivers/remoteproc/remoteproc_core.c")
+PAS = Path("drivers/remoteproc/qcom_q6v5_pas.c")
+TG_PROVIDER = Path("drivers/a52_pil/subsystem_notif.c")
 RMNET = Path("drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c")
 QMI_HEADER = Path("drivers/platform/msm/ipa/ipa_v3/ipa_qmi_service.h")
 MAKE = Path("drivers/platform/msm/Makefile")
@@ -59,6 +61,29 @@ def apply(root):
                "A4b producer canonical notifier headers")
     core.write_text(raw)
 
+    # The notifier provider carries an opaque void *payload and normally
+    # includes only subsystem_notif.h. PAS usually includes only restart.h.
+    # Include BOTH pinned headers here to make the complete ABI testable in
+    # every named translation unit; do not alter notifier behavior.
+    provider = root / TG_PROVIDER
+    provider_source = provider.read_text()
+    provider_source = once(
+        provider_source,
+        '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"',
+        '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"\n'
+        '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"',
+        "TG notifier provider has both canonical headers")
+    provider.write_text(provider_source)
+    pas = root / PAS
+    pas_source = pas.read_text()
+    pas_source = once(
+        pas_source,
+        '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"',
+        '#include "../../a52-compat/include/soc/qcom/subsystem_notif.h"\n'
+        '#include "../../a52-compat/include/soc/qcom/subsystem_restart.h"',
+        "PAS has both canonical headers")
+    pas.write_text(pas_source)
+
     makefile = root / MAKE
     m = makefile.read_text()
     if MARKER in m:
@@ -97,8 +122,14 @@ def apply(root):
 def check(root):
     core = (root / CORE).read_text()
     rmnet = (root / RMNET).read_text()
+    pas = (root / PAS).read_text()
+    provider = (root / TG_PROVIDER).read_text()
     mk = (root / MAKE).read_text()
     canonical = includes(root, CORE)
+    for other, name in ((pas, "PAS"), (provider, "TG notifier provider")):
+        for header in (TG_NOTIF, TG_RESTART):
+            if '#include "../../' + header + '"' not in other:
+                raise RuntimeError(f"A6c {name} lacks explicit canonical {header}")
     for token in canonical + [
         "subsys_notif_add_subsys(\"modem\")",
         "subsys_notif_queue_notification(handle, task->type, &data)",
@@ -125,7 +156,6 @@ def check(root):
         raise RuntimeError("A6c mismatch between producer modem and RMNET registration")
     if "qcom_register_ssr_notifier(" in rmnet:
         raise RuntimeError("A6c unexpected alternate GKI SSR registrar")
-    provider = (root / "drivers/a52_pil/subsystem_notif.c").read_text()
     for token in ("void *subsys_notif_register_notifier(",
                   "srcu_notifier_chain_register(",
                   "void *subsys_notif_add_subsys(",
