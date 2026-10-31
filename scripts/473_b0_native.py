@@ -184,7 +184,7 @@ def stage(root, tg):
         raise RuntimeError("P473 pinned TG HSP SOC definitions missing")
     slim_text = slim_header.read_text()
     for symbol, value in hsp.items():
-        if not re.search(r"\\b" + symbol + r"\\s*=\\s*" + value + r"\\b", slim_text):
+        if not re.search(r"\b" + symbol + r"\s*=\s*" + value + r"\b", slim_text):
             raise RuntimeError("P473 TG HSP SOC definition drift: " + symbol)
         if bt.count(symbol) != 1:
             raise RuntimeError("P473 unexpected HSP SOC identifier count: " + symbol)
@@ -196,8 +196,7 @@ def stage(root, tg):
         " * TG normally supplies these via btfm_slim_slave.h only for SLIM.\n"
         " * The native B0 build has no SLIM provider; avoid a fake header.\n"
         " */\n"
-        "#if !defined(CONFIG_BT_SLIM_QCA6390) && \\\n"
-        "    !defined(CONFIG_BTFM_SLIM_WCN3990)\n"
+        "#if !defined(CONFIG_BT_SLIM_QCA6390) && !defined(CONFIG_BTFM_SLIM_WCN3990)\n"
         "enum {\n" +
         "".join("\t" + symbol + " = " + value + ",\n"
                 for symbol, value in hsp.items()) +
