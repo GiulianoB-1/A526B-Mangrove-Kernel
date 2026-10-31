@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A6c TG notifier ABI, IPA callback source-route audit; NO ARM
+run-name: P470-A6d IPA SMMU CB count and firmware loader state machine; NO ARM
 on:
   push:
     branches:
@@ -26,6 +26,7 @@ on:
       - agent/p470a6-tg-msm-bus-real-votes-firstflash-gated
       - agent/p470a6b-mss-ssr-desc-abi-guard-no-flash
       - agent/p470a6c-ipa-notifier-tg-abi-audit-no-arm
+      - agent/p470a6d-ipa-smmu-cb-fw-loader-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -112,7 +113,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py scripts/470_a6d_ipa_fw_smmu_cb.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1665,6 +1666,11 @@ jobs:
           python3 scripts/470_a6c_notifier_abi.py --root "$ROOT" \
             --report phase447-inventory/P470-A6C-NOTIFIER-SOURCE-ROUTE.json
           python3 scripts/470_a6c_notifier_abi.py --root "$ROOT" --check-only
+          # P470-A6d: count available TG Lagoon AP/WLAN/uC sibling CB nodes,
+          # preserving the explicit property and IPA default DISARM.
+          python3 scripts/470_a6d_ipa_fw_smmu_cb.py --root "$ROOT" \
+            --report phase447-inventory/P470-A6D-FW-SMMU-CB-SOURCE.json
+          python3 scripts/470_a6d_ipa_fw_smmu_cb.py --root "$ROOT" --check-only
           # A6 was compiled immediately above: only the A6b fix changes
           # before this second, incremental native Image link.
           # Preserve P470-A6 #678 and A6b vmlinux separately.
@@ -1721,6 +1727,20 @@ jobs:
             }
           done
           grep -aFq 'P470-A6c RMNET SSR callback event=' "$BUILD/arch/arm64/boot/Image"
+          for marker in "P470 IPA SMMU_CB max=%u source=dt_nodes" \
+              "P470 IPA SMMU_CB max=%u source=property" \
+              "P470 IPA SMMU_CB probed=%d/%d" \
+              "P470 IPA FW_SM event=%d state=%d" \
+              "P470 IPA FW_SM schedule=1" \
+              "P470 IPA FW_SM work_start schedule_to_start_ms=" \
+              "P470 IPA FW_SM subsystem_get_ms=" \
+              "P470 IPA FW_SM post_init_rc="; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P470-A6d firmware trace missing from Image::$marker"
+              exit 1
+            }
+          done
+          echo 'P470-A6d FW SM plus count from available CB nodes linked PASS; hardware FW latency vs 15s MSS wait PENDING' >> "$GITHUB_STEP_SUMMARY"
           echo 'P470-A6c TG notifier ABI preprocessor plus SRCU registration/queue static route PASS; hardware delivery PENDING; NO ARM' >> "$GITHUB_STEP_SUMMARY"
           for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping msm_bus_scale_register_client msm_bus_scale_client_update_request msm_bus_scale_unregister_client a52_p470_ssr_desc_alloc a52_p470_ssr_desc_free; do
             grep -Eq "[[:space:]]$symbol$" "$BUILD/System.map" || {
@@ -1740,7 +1760,9 @@ jobs:
             "P470 IPA BUS TABLE state=" \
             "P470-A6b SSR ABI MISMATCH" \
             "P470-A6b PAS ABI qcom_adsp_size=" \
-            "P470-A6c RMNET SSR callback event="; do
+            "P470-A6c RMNET SSR callback event=" \
+            "P470 IPA FW_SM schedule=1" \
+            "P470 IPA SMMU_CB probed="; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P470-A4 missing linked safety marker::$marker"
               exit 1
@@ -1760,21 +1782,21 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P470-A6C-NOTIFIER-ABI-NO-ARM.boot.img \
+            --output phase447b-variants/MANGROVE-P470-A6D-IPA-FW-SMMU-CB-NO-ARM.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P470-A6C-NOTIFIER-ABI-NO-ARM.boot.img \
+            --candidate phase447b-variants/MANGROVE-P470-A6D-IPA-FW-SMMU-CB-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
-          cp "$BUILD/vmlinux" phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.vmlinux
-          cp "$BUILD/System.map" phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.System.map
-          readelf -SW phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.vmlinux | grep -F .debug_info
-          sha256sum phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.vmlinux \
-                    phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P470-A6C-NOTIFIER-ABI-NO-ARM.boot.img \
-            > phase447-inventory/P470-A6C-NOTIFIER-CANDIDATE-SYMBOLS.sha256
+          cp "$BUILD/vmlinux" phase447b-variants/P470-A6D-FW-CB-CANDIDATE.vmlinux
+          cp "$BUILD/System.map" phase447b-variants/P470-A6D-FW-CB-CANDIDATE.System.map
+          readelf -SW phase447b-variants/P470-A6D-FW-CB-CANDIDATE.vmlinux | grep -F .debug_info
+          sha256sum phase447b-variants/P470-A6D-FW-CB-CANDIDATE.vmlinux \
+                    phase447b-variants/P470-A6D-FW-CB-CANDIDATE.System.map \
+                    phase447b-variants/MANGROVE-P470-A6D-IPA-FW-SMMU-CB-NO-ARM.boot.img \
+            > phase447-inventory/P470-A6D-FW-CB-CANDIDATE-SYMBOLS.sha256
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -1794,14 +1816,14 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P470-A6C-NOTIFIER-ABI-NO-ARM-${{ github.run_number }}
+          name: MANGROVE-P470-A6D-IPA-FW-SMMU-CB-NO-ARM-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P470-A6C-NOTIFIER-ABI-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P470-A6D-IPA-FW-SMMU-CB-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
-            phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.vmlinux
-            phase447b-variants/P470-A6C-NOTIFIER-CANDIDATE.System.map
-            phase447-inventory/P470-A6C-NOTIFIER-CANDIDATE-SYMBOLS.sha256
+            phase447b-variants/P470-A6D-FW-CB-CANDIDATE.vmlinux
+            phase447b-variants/P470-A6D-FW-CB-CANDIDATE.System.map
+            phase447-inventory/P470-A6D-FW-CB-CANDIDATE-SYMBOLS.sha256
           if-no-files-found: error
           compression-level: 1
       - name: Upload P470-A6b #678 source-equivalent DWARF forensic rebuild (NO FLASH)
@@ -1830,6 +1852,7 @@ jobs:
             phase447-inventory/P470-A6B-MSS-SSR-ABI-GUARD.json
             phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
             phase447-inventory/P470-A6C-NOTIFIER-SOURCE-ROUTE.json
+            phase447-inventory/P470-A6D-FW-SMMU-CB-SOURCE.json
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-ABI.json
             phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
             phase447-inventory/P470-A6C-CPP-REAL-COMPILER.json
@@ -1848,6 +1871,7 @@ jobs:
             scripts/470_a6b_mss_ssr_abi_guard.py
             scripts/470_a6b_ssr_preprocessed_audit.py
             scripts/470_a6c_notifier_abi.py
+            scripts/470_a6d_ipa_fw_smmu_cb.py
             scripts/470_a6c_notifier_preprocess_audit.py
             scripts/470_a6c_kbuild_cpp_replay.py
           if-no-files-found: warn
