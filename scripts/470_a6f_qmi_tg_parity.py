@@ -251,6 +251,16 @@ def once(s, old, new, label):
         raise RuntimeError(f"P470-A6f {label}: anchor count={count}")
     return s.replace(old, new, 1)
 
+def once_in_init_modem(s, old, new, label):
+    """Patch only INIT_MODEM_DRIVER, not other QMI request handlers."""
+    start = s.find("static int ipa3_qmi_init_modem_send_sync_msg(void)")
+    end = s.find("/* sending filter-install-request to modem*/", start)
+    if start < 0 or end <= start:
+        raise RuntimeError(f"P470-A6f {label}: INIT_MODEM function boundary changed")
+    # Strict once() still rejects absent or duplicated anchors *within* INIT_MODEM.
+    return s[:start] + once(s[start:end], old, new, label) + s[end:]
+
+
 def get_partition(s):
     m = PART_RE.search(s)
     if not m:
@@ -335,7 +345,7 @@ def patch(root):
     codec = (root / QMI_CODEC).read_text()
     legacy_qmi_contract(s, codec)
     # Pinned IPA4.7 modem has pipes 0..22 and APPS_WAN_CONS=16.
-    s = once(s,
+    s = once_in_init_modem(s,
         '\treq.hdr_proc_ctx_tbl_info_valid =\n',
         '\tif (ipa3_ctx->ipa_hw_type == IPA_HW_v4_7 &&\n'
         '\t    (ipa3_ctx->ipa_num_pipes != 23 ||\n'
@@ -349,25 +359,25 @@ def patch(root):
         '\t}\n\n'
         '\treq.hdr_proc_ctx_tbl_info_valid =\n',
         "IPA47 endpoint guard")
-    s = once(s,
+    s = once_in_init_modem(s,
         '\treq_desc.max_msg_len = QMI_IPA_INIT_MODEM_DRIVER_REQ_MAX_MSG_LEN_V01;\n',
         make_full_request_log() +
         '\treq_desc.max_msg_len = QMI_IPA_INIT_MODEM_DRIVER_REQ_MAX_MSG_LEN_V01;\n',
         "full QMI request log")
-    s = once(s,
+    s = once_in_init_modem(s,
         '\tif (unlikely(!ipa_q6_clnt))\n\t\treturn -ETIMEDOUT;',
         '\tif (unlikely(!ipa_q6_clnt)) {\n'
         '\t\tpr_err("P470 QMI INIT_MODEM no Q6 client rc=%d\\n", -ETIMEDOUT);\n'
         '\t\treturn -ETIMEDOUT;\n'
         '\t}',
         "missing QMI client")
-    s = once(s,
+    s = once_in_init_modem(s,
         '\tif (rc < 0) {\n\t\tIPAWANERR("QMI send Req %d failed, rc= %d\\n",',
         '\tpr_info("P470 QMI INIT_MODEM response transport_rc=%d result=%u error=%u\\n",\n'
         '\t\trc, resp.resp.result, resp.resp.error);\n'
         '\tif (rc < 0) {\n\t\tIPAWANERR("QMI send Req %d failed, rc= %d\\n",',
         "transport response report")
-    s = once(s,
+    s = once_in_init_modem(s,
         '\tpr_info("QMI_IPA_INIT_MODEM_DRIVER_REQ_V01 response received\\n");\n'
         '\treturn ipa3_check_qmi_response(rc,\n'
         '\t\tQMI_IPA_INIT_MODEM_DRIVER_REQ_V01, resp.resp.result,\n'
