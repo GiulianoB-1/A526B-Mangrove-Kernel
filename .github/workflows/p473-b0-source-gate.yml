@@ -1,0 +1,89 @@
+name: "P473 B0 SE1 FIFO/GSI and TG BTPOWER pinned-source gate"
+run-name: "P473 B0 source gate: no Image, no ARM"
+on:
+  push:
+    branches:
+      - agent/p473-b0-se1-geni-fifo-btpower-no-arm
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bt-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact TG UART and Bluetooth power driver
+        run: |
+          set -Eeuo pipefail
+          mkdir -p workspace/tg/drivers/tty/serial workspace/tg/drivers/bluetooth \
+            workspace/tg/include/linux output
+          TG=6bf351bdf18bdb228db79e66f14a7a9c0178e5d7
+          for spec in drivers/tty/serial/msm_geni_serial.c \
+                      drivers/bluetooth/bluetooth-power.c \
+                      include/linux/bluetooth-power.h \
+                      include/linux/qcom-geni-se.h; do
+            curl --fail --location --retry 4 --silent --show-error \
+              "https://raw.githubusercontent.com/micr0softstore/samsung_android_kernel_a52xq/$TG/$spec" \
+              -o "workspace/tg/$spec"
+          done
+          sha256sum workspace/tg/drivers/tty/serial/msm_geni_serial.c \
+            workspace/tg/drivers/bluetooth/bluetooth-power.c \
+            workspace/tg/include/linux/bluetooth-power.h \
+            workspace/tg/include/linux/qcom-geni-se.h > output/TG-SOURCE-SHA256.txt
+      - name: Adapt SE1 read-only mode gate, validate TG btpower ioctl contract
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/473_b0_se1_geni_fifo_gate.py
+          python3 scripts/473_b0_se1_geni_fifo_gate.py \
+            --tg workspace/tg \
+            --out output/msm_geni_serial.c \
+            --report output/P473-B0-SOURCE-STATUS.json
+          python3 scripts/473_b0_se1_geni_fifo_gate.py \
+            --tg workspace/tg --out output/msm_geni_serial.c --check-only
+          diff -u workspace/tg/drivers/tty/serial/msm_geni_serial.c \
+            output/msm_geni_serial.c > output/P473-B0-SE1-GUARD.diff || test $? -eq 1
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          bt = Path("workspace/tg/drivers/bluetooth/bluetooth-power.c").read_text()
+          hdr = Path("workspace/tg/include/linux/bluetooth-power.h").read_text()
+          geni = Path("workspace/tg/include/linux/qcom-geni-se.h").read_text()
+          for tok in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
+                      "BT_CMD_CHECK_SW_CTRL", "BT_CMD_GETVAL_POWER_SRCS",
+                      ".unlocked_ioctl = bt_ioctl", ".compat_ioctl = bt_ioctl",
+                      '"btpower"'):
+              if tok not in bt:
+                  raise SystemExit("P473 BTPOWER missing: " + tok)
+          for code in ("0xbfac", "0xbfad", "0xbfae", "0xbfb0", "0xbfb1"):
+              if code not in hdr.lower():
+                  raise SystemExit("P473 ioctl number lost: " + code)
+          if "#define GENI_IF_FIFO_DISABLE_RO" not in geni or "#define FIFO_IF_DISABLE" not in geni:
+              raise SystemExit("P473 GENI register or bit definition unavailable")
+          Path("output/P473-BTPOWER-ABI-REPORT.json").write_text(json.dumps({
+              "tg_commit": "6bf351bdf18bdb228db79e66f14a7a9c0178e5d7",
+              "btpower_ioctl_abi": "TG source inspected",
+              "btpower_5_10_link": "NOT ATTEMPTED",
+              "serial_5_10_link": "NOT ATTEMPTED",
+              "se1_mode": "UNKNOWN, requires hardware read with B0 driver",
+              "se9_console": "unchanged",
+              "flash_authorized": False,
+          }, indent=2) + "\n")
+          print("P473 B0 TG BTPOWER ioctl and GENI SE1 FIFO source guards PASS; no 5.10 link")
+          PY
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### P473 B0 status"
+            echo "SE1 FIFO-disable read gate generated from pinned TG source."
+            echo "TG btpower ioctl ABI verified, but neither driver linked into GKI yet."
+            echo "No /dev/btpower or /dev/ttyHS0 claim. Do not flash."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: P473-B0-SOURCE-ONLY-NO-FLASH
+          path: |
+            output/
+          if-no-files-found: warn
