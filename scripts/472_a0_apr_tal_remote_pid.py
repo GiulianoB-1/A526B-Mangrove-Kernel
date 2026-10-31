@@ -24,8 +24,9 @@ PROBE = r'''static int apr_tal_rpmsg_probe(struct rpmsg_device *rpdev)
 	 * qcom,remote-pid but NOT TG's legacy mbox-names.
 	 * Do not use substring matches against PAS mbox-names ("mss-pil").
 	 */
-	if (!rpdev || !rpdev->dev.parent ||
-	    !rpdev->dev.parent->of_node) {
+	if (!rpdev)
+		return -EINVAL;
+	if (!rpdev->dev.parent || !rpdev->dev.parent->of_node) {
 		dev_err(&rpdev->dev, "P472 A0 APR_TAL missing parent edge rc=%d\n",
 			-EINVAL);
 		return -EINVAL;
