@@ -47,14 +47,30 @@ def main():
         init[name]={"symbol":matching[0][0],**matching[0][1]}
     if not init["ipa_module_init"]["address"] < init["ipa_clients_manager_init"]["address"]:
         raise RuntimeError("P470-A6e BAD initcall order: clients before IPA ctx allocation")
-    for obj in (
-        "drivers/platform/msm/ipa/ipa_clients/ipa_clientsm.o",
-        "drivers/platform/msm/ipa/ipa_clients/ipa_clients_manager.o",
-        "drivers/platform/msm/ipa/ipa_clients/rndisipam.o",
-        "drivers/platform/msm/ipa/ipa_clients/rndis_ipa.o",
-    ):
-        if not (a.build / obj).is_file():
-            raise RuntimeError("P470-A6e missing built-in client object "+obj)
+    # In this native built-in Kbuild, composite -objs are expanded into
+    # individual members of the directory's thin built-in.a archive.
+    # Requiring ipa_clientsm.o or rndisipam.o as standalone intermediates
+    # incorrectly rejects a successful Image link. We instead require the
+    # archive, every real compiled constituent, and the linked System.map
+    # symbols and initcall order already verified above.
+    archive = a.build / "drivers/platform/msm/ipa/ipa_clients/built-in.a"
+    if not archive.is_file() or archive.stat().st_size < 8:
+        raise RuntimeError("P470-A6e missing real IPA clients built-in.a archive")
+    objects = (
+        "ipa_clients_manager.o",
+        "ipa_usb.o",
+        "ipa_wdi3.o",
+        "ipa_gsb.o",
+        "ipa_uc_offload.o",
+        "ipa_wigig.o",
+        "ipa_mhi_client.o",
+        "rndis_ipa.o",
+    )
+    objdir = a.build / "drivers/platform/msm/ipa/ipa_clients"
+    for obj in objects:
+        if not (objdir / obj).is_file():
+            raise RuntimeError("P470-A6e missing compiled IPA clients member "+obj)
+    compiled_members = [str(objdir / obj) for obj in objects]
     report={
         "phase":"P470-A6e-REAL-COMPILED-IPA-CLIENTS-ORDER",
         "symbols":symbols,
@@ -62,6 +78,10 @@ def main():
         "core_initcall_before_clients_initcall":True,
         "ipa_clients_manager_present_in_native_system_map":True,
         "real_rndis_ipa_builtin_and_symbols_present":True,
+        "compiled_clients_archive":str(archive),
+        "compiled_clients_members":compiled_members,
+        "link_proof":"native System.map symbols and ordered subsys initcalls",
+        "composite_o_intermediate_not_required_for_builtin_archive":True,
         "qmi_service_runtime_started":False,
         "hardware_stability_unverified":True,
         "ipa_disarmed_default":True,
