@@ -222,6 +222,24 @@ config RNDIS_IPA
              '/* P470-A6e: GKI 5.10 debugfs scalar helper return ABI. */\n'
              'static void rndis_ipa_debugfs_init(struct rndis_ipa_dev *rndis_ipa_ctx)\n{',
              "RNDIS debugfs ABI marker")
+    # P470-A6e: 5.10 net_device_ops.ndo_tx_timeout includes txqueue.
+    # Preserve the pinned donor's timeout accounting and diagnostics.
+    s = once(s,
+        "static void rndis_ipa_tx_timeout(struct net_device *net);",
+        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue);",
+        "RNDIS tx_timeout declaration 5.10")
+    s = once(s,
+        "static void rndis_ipa_tx_timeout(struct net_device *net)\n{",
+        "/* P470-A6e: netdev tx_timeout 5.10 ABI. */\n"
+        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{",
+        "RNDIS tx_timeout definition 5.10")
+    s = once(s,
+        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{\n"
+        "\tstruct rndis_ipa_dev *rndis_ipa_ctx = netdev_priv(net);",
+        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{\n"
+        "\tstruct rndis_ipa_dev *rndis_ipa_ctx = netdev_priv(net);\n"
+        "\t(void)txqueue;",
+        "RNDIS unused txqueue")
     f.write_text(s)
 
 def check(root):
@@ -250,6 +268,7 @@ def check(root):
         ("P470 RMNET QMI server_register rc=", qmi),
         ("P470-A6e: GKI 5.10 debugfs_create_u32 returns void.", mhi),
         ("P470-A6e: GKI 5.10 debugfs scalar helper return ABI.", rndis),
+        ("P470-A6e: netdev tx_timeout 5.10 ABI.", rndis),
         ("#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_clients", rndis_trace),
         ("config RNDIS_IPA", cfg),
     ):
@@ -257,6 +276,10 @@ def check(root):
             raise RuntimeError("P470-A6e missing diagnostic: "+marker)
     if "file = debugfs_create_u32(" in mhi:
         raise RuntimeError("P470-A6e stale MHI debugfs_create_u32 void assignment")
+    if "static void rndis_ipa_tx_timeout(struct net_device *net);" in rndis:
+        raise RuntimeError("P470-A6e stale RNDIS timeout callback prototype")
+    if "static void rndis_ipa_tx_timeout(struct net_device *net)\\n{" in rndis:
+        raise RuntimeError("P470-A6e stale RNDIS timeout callback definition")
     if re.search(r"\bfile = debugfs_create_(?:bool|u8|u32)\s*\(", rndis):
         raise RuntimeError("P470-A6e stale RNDIS debugfs scalar assignment")
     return {"phase":"P470-A6e-REAL-IPA-CLIENTS-MANAGER",
