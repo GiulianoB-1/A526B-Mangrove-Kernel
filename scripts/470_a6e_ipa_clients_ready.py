@@ -234,12 +234,10 @@ config RNDIS_IPA
         "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{",
         "RNDIS tx_timeout definition 5.10")
     s = once(s,
-        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{\n"
-        "\tstruct rndis_ipa_dev *rndis_ipa_ctx = netdev_priv(net);",
-        "static void rndis_ipa_tx_timeout(struct net_device *net, unsigned int txqueue)\n{\n"
-        "\tstruct rndis_ipa_dev *rndis_ipa_ctx = netdev_priv(net);\n"
+        "\tint outstanding = atomic_read(&rndis_ipa_ctx->outstanding_pkts);",
+        "\tint outstanding = atomic_read(&rndis_ipa_ctx->outstanding_pkts);\n"
         "\t(void)txqueue;",
-        "RNDIS unused txqueue")
+        "RNDIS unused txqueue after declarations")
     f.write_text(s)
 
 def check(root):
@@ -278,7 +276,7 @@ def check(root):
         raise RuntimeError("P470-A6e stale MHI debugfs_create_u32 void assignment")
     if "static void rndis_ipa_tx_timeout(struct net_device *net);" in rndis:
         raise RuntimeError("P470-A6e stale RNDIS timeout callback prototype")
-    if "static void rndis_ipa_tx_timeout(struct net_device *net)\\n{" in rndis:
+    if re.search(r"static void rndis_ipa_tx_timeout\(struct net_device \*net\)\s*\{", rndis):
         raise RuntimeError("P470-A6e stale RNDIS timeout callback definition")
     if re.search(r"\bfile = debugfs_create_(?:bool|u8|u32)\s*\(", rndis):
         raise RuntimeError("P470-A6e stale RNDIS debugfs scalar assignment")
