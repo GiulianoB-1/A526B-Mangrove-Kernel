@@ -1719,7 +1719,7 @@ jobs:
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
             --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL \
-            --enable P473_TG_HSUART --enable P473_TG_BTPOWER
+            --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 olddefconfig
@@ -1739,7 +1739,7 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
-          for feature in CONFIG_P473_TG_HSUART=y CONFIG_P473_TG_BTPOWER=y; do
+          for feature in CONFIG_SERIAL_QCOM_GENI=y CONFIG_P473_TG_BTPOWER=y; do
             grep -Fxq "$feature" "$BUILD/.config" || {
               echo "::error title=P473::genuine TG UART or BTPOWER Kconfig refused::$feature"; exit 1;
             }
@@ -1822,19 +1822,20 @@ jobs:
           python3 scripts/473_b0_native.py --root "$ROOT" --check-only
           for marker in 'P473 UART ttyHS0 probe mode=' \
                         'P473 UART ttyHS0 probe resources_on rc=' \
+                        'P473 UART ttyHS0 ready' \
                         'BT_CMD_PWR_CTRL'; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P473::real BTPOWER/SE1 marker absent from Image::$marker"; exit 1;
             }
           done
-          grep -Eq '[[:space:]]msm_geni_serial_probe$' "$BUILD/System.map" || {
+          grep -Eq '[[:space:]]qcom_geni_serial_probe$' "$BUILD/System.map" || {
             echo "::error title=P473::TG HS UART driver absent from System.map"; exit 1;
           }
           grep -Eq '[[:space:]]bluetooth_power_init$' "$BUILD/System.map" || {
             echo "::error title=P473::TG BTPOWER driver absent from System.map"; exit 1;
           }
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
-          echo 'P473 real TG Bluetooth/SE1 native code linked; HAL/FIFO/TTY hardware pending.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P473 native 5.10 ttyHS Samsung SE1 bind and TG Bluetooth power linked; hardware pending.' >> "$GITHUB_STEP_SUMMARY"
           echo 'P471-D1 linked native Qualcomm rmnet core + ctl, netlink/WWAN/GSI/packet real rc traces PASS; data call UNVERIFIED. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           python3 scripts/470_a6b_ssr_preprocessed_audit.py \
             --baseline-pas phase447-inventory/P470-A6B-P469B-PAS.i \
