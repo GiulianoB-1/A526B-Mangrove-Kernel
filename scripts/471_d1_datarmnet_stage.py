@@ -17,6 +17,8 @@ ETH_M = Path("drivers/net/ethernet/qualcomm/Makefile")
 RMNET = Path("drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c")
 WAN = Path("drivers/platform/msm/ipa/ipa_v3/rmnet_ipa_fd_ioctl.c")
 P471 = "P471_D1_QCOM_DATARMNET_CORE_CTL_NO_ARM_V1"
+TRACE_INCLUDE_PATH = "../../drivers/net/ethernet/qualcomm/rmnet_p471"
+DONOR_TRACE_INCLUDE_PATH = "../../../../vendor/qcom/opensource/datarmnet/core"
 
 def once(s, old, new, name):
     n = s.count(old)
@@ -42,6 +44,18 @@ def files_from_donor(donor, target):
         if v not in mk:
             raise RuntimeError("P471 donor Kbuild drift: " + v)
     shutil.copytree(src, target)
+    # TRACE_INCLUDE_PATH is evaluated from include/trace/define_trace.h,
+    # not the directory containing rmnet_trace.h. The donor hardcodes an
+    # Android vendor path which does not exist in the in-tree 5.10 port.
+    trace_hdr = target / "rmnet_trace.h"
+    trace = trace_hdr.read_text()
+    trace = once(
+        trace,
+        "#define TRACE_INCLUDE_PATH " + DONOR_TRACE_INCLUDE_PATH,
+        "#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH,
+        "donor trace include path",
+    )
+    trace_hdr.write_text(trace)
     # This is not an external module: both objects must link into vmlinux.
     mk = mk.replace("obj-m += rmnet_core.o",
                     "obj-$(CONFIG_P471_RMNET_CORE) += rmnet_core.o")
@@ -261,6 +275,14 @@ def check(root):
     ip = (root / RMNET).read_text()
     fd = (root / WAN).read_text()
     c = (core / "rmnet_config.c").read_text()
+    trace = (core / "rmnet_trace.h").read_text()
+    if trace.count("#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH) != 1:
+        raise RuntimeError("P471 trace header must use in-tree include path")
+    if DONOR_TRACE_INCLUDE_PATH in trace:
+        raise RuntimeError("P471 stale vendor trace header path")
+    trace_target = (root / "include/trace" / TRACE_INCLUDE_PATH / "rmnet_trace.h").resolve()
+    if trace_target != (core / "rmnet_trace.h").resolve() or not trace_target.is_file():
+        raise RuntimeError("P471 trace path does not resolve from define_trace.h")
     for need in ("P471 RMNET LINK add name=", "parent=%s mux=%u flags=0x%x rc=%d",
                  "IFLA_RMNET_DFC_QOS", "IFLA_RMNET_UL_AGG_PARAMS",
                  "p471_rmnet_newlink_impl"):
