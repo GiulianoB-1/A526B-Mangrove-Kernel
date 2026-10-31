@@ -1,203 +1,225 @@
 #!/usr/bin/env python3
-"""P473 B0 native TG Bluetooth power + SE1 HS-UART 5.10 compilation attempt.
+"""P473 B0 native 5.10 SE1 HS-UART binding + TG Bluetooth power.
 
-No fake /dev nodes, no BT firmware, no SE9 hijack. Refuse missing genuine
-provider API rather than silently building no-op hardware shims.
+The original TG UART implementation depends on a 4.19 se_geni_rsc and
+downstream qcom-geni-se resource provider. Reusing its private ABI
+against GKI 5.10 is incorrect. Instead adapt the ACTUAL pinned 5.10
+GENI UART driver with a hardware mode gate. It already supplies ttyHS.
+Only the legacy SE1 compatible is added. No second UART owner or
+global upstream GENI header replacement; SE9 console is untouched.
 """
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 TG_SHA = "6bf351bdf18bdb228db79e66f14a7a9c0178e5d7"
-UART_PATH = Path("drivers/tty/serial/msm_geni_serial_p473.c")
-BT_PATH = Path("drivers/bluetooth/bluetooth_power_p473.c")
+UART = Path("drivers/tty/serial/qcom_geni_serial.c")
+BT = Path("drivers/bluetooth/bluetooth_power_p473.c")
 HEADER = Path("include/linux/bluetooth-power.h")
-GENI = Path("include/linux/qcom-geni-se.h")
-MARK = "P473_B0_TG_NATIVE_SE1_BTPOWER_V1"
-UK = '''
-config P473_TG_HSUART
-\tbool "P473 TG GENI HS UART SE1 only, experimental"
-\tdepends on SERIAL_CORE && OF && PM
-\tdefault n
-\thelp
-\t  Real downstream TG HS UART, not an upstream ttyMSM symlink.
-'''
-BK = '''
+MARK = "P473_B0_NATIVE_SE1_FIFO_GUARD_V2"
+BT_KCONFIG = '''
 config P473_TG_BTPOWER
 \tbool "P473 TG WCN3990 Bluetooth power, experimental"
 \tdepends on OF && GPIOLIB && REGULATOR
 \tdefault n
 \thelp
-\t  Real TG Bluetooth ioctl power controller, no powered-on default.
+\t  Real TG Bluetooth power ioctl driver, with default power off.
 '''
 
-def replace_once(s, old, new, name):
+def replace_once(s, old, new, why):
     n = s.count(old)
     if n != 1:
-        raise RuntimeError(f"P473 {name}: TG anchor count={n}")
+        raise RuntimeError("P473 native " + why + ": anchor count " + str(n))
     return s.replace(old, new, 1)
 
 def patch_uart(s):
     if MARK in s:
-        raise RuntimeError("P473 UART already patched")
-    anchor = ('\tuport->private_data = (void *)drv;\n'
-              '\tplatform_set_drvdata(pdev, dev_port);\n'
-              '\tif (is_console) {')
-    new = r'''	/* P473_B0_TG_NATIVE_SE1_BTPOWER_V1
-	 * Read-only hardware mode gate on live SE1 after resources_on;
-	 * never access clock-gated MMIO, never bind GSI-only hardware.
-	 */
-	if (!is_console && uport->mapbase == 0x884000) {
-		u32 fifo_disable;
-		int off_rc;
+        raise RuntimeError("P473 duplicate source stage")
+    # Don't extend the generic compat: only bind Samsung's actual SE1 HS.
+    match = re.search(r'(^\s*\{\s*\.compatible\s*=\s*"qcom,geni-uart"\s*,?\s*\},)', s, re.M)
+    if not match or s.count('"qcom,geni-uart"') != 1:
+        raise RuntimeError("P473 5.10 UART compatible drift: no single generic UART entry")
+    if '"qcom,msm-geni-serial-hs"' in s:
+        raise RuntimeError("P473 existing Samsung compatible owner, cannot duplicate")
+    s = s[:match.end()] + '\n\t{ .compatible = "qcom,msm-geni-serial-hs", }, /* P473 SE1 only */' + s[match.end():]
 
-		if (line != 0 || dev_port->wakeup_irq <= 0 ||
-		    dev_port->wakeup_byte != 0xFD) {
+    # Do not request/remap the MMIO resource twice after the early probe
+    # hardware-mode read, which would otherwise return EBUSY in config_port.
+    pat = r'(?P<ind>^\s*)uport->membase\s*=\s*devm_platform_ioremap_resource\(pdev,\s*0\);'
+    m = re.search(pat, s, re.M)
+    if not m or s.count("devm_platform_ioremap_resource(pdev, 0)") != 1:
+        raise RuntimeError("P473 native UART MMIO reservation function changed")
+    indent = m.group('ind')
+    new = (indent + "if (!uport->membase)\n" + indent +
+           "\tuport->membase = devm_platform_ioremap_resource(pdev, 0);")
+    s = s[:m.start()] + new + s[m.end():]
+
+    # Inject at a point after device, clocks, interconnect, IRQ, OPP and
+    # line setup are valid but strictly before uart_add_one_port().
+    anchor = "\tport->private_data.drv = drv;\n\tuport->private_data = &port->private_data;"
+    gate = r'''	/* P473_B0_NATIVE_SE1_FIFO_GUARD_V2.
+	 * DO NOT bind the legacy Samsung UART to GSI-only SE1.
+	 * In 5.10, GENI_IF_DISABLE_RO is register offset 0x64.
+	 * Make no writes to SE1; balance GENI clocks and ICC votes.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "qcom,msm-geni-serial-hs")) {
+		u32 wake_byte;
+		u32 fifo_disable;
+		int off_rc, icc_rc;
+
+		if (line != 0 || uport->mapbase != 0x884000 ||
+		    port->wakeup_irq <= 0 ||
+		    of_property_read_u32(pdev->dev.of_node,
+					 "qcom,wakeup-byte", &wake_byte) ||
+		    wake_byte != 0xfd) {
 			ret = -ENODEV;
 			dev_err(&pdev->dev,
-				"P473 UART ttyHS0 probe bad wake/alias rc=%d\n", ret);
-			goto exit_wakeup_unregister;
+				"P473 UART ttyHS0 probe invalid SE1 DT/IRQ/alias rc=%d\n",
+				ret);
+			goto err;
 		}
-		ret = se_geni_resources_on(&dev_port->serial_rsc);
+		uport->membase = devm_platform_ioremap_resource(pdev, 0);
+		if (IS_ERR(uport->membase)) {
+			ret = PTR_ERR(uport->membase);
+			uport->membase = NULL;
+			goto err;
+		}
+		port->se.base = uport->membase;
+
+		ret = geni_icc_enable(&port->se);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"P473 UART ttyHS0 probe icc_on rc=%d\n", ret);
+			goto err;
+		}
+		ret = geni_se_resources_on(&port->se);
 		if (ret) {
 			dev_err(&pdev->dev,
 				"P473 UART ttyHS0 probe resources_on rc=%d\n", ret);
-			goto exit_wakeup_unregister;
+			geni_icc_disable(&port->se);
+			goto err;
 		}
-		fifo_disable = geni_read_reg_nolog(uport->membase,
-						  GENI_IF_FIFO_DISABLE_RO);
-		off_rc = se_geni_resources_off(&dev_port->serial_rsc);
-		if (off_rc) {
-			dev_err(&pdev->dev,
-				"P473 UART ttyHS0 probe resources_off rc=%d\n", off_rc);
-			ret = off_rc;
-			goto exit_wakeup_unregister;
-		}
-		ret = fifo_disable & FIFO_IF_DISABLE ? -ENODEV : 0;
+		/* TG GENI_IF_FIFO_DISABLE_RO == 0x64; bit 0 = GSI-only. */
+		fifo_disable = readl_relaxed(uport->membase + 0x64);
+		off_rc = geni_se_resources_off(&port->se);
+		icc_rc = geni_icc_disable(&port->se);
+		ret = off_rc ? off_rc : icc_rc;
+		if (!ret && (fifo_disable & BIT(0)))
+			ret = -ENODEV;
 		dev_info(&pdev->dev,
-			 "P473 UART ttyHS0 probe mode=%s raw=0x%08x rc=%d\n",
-			 ret ? "GSI" : "FIFO", fifo_disable, ret);
+			 "P473 UART ttyHS0 probe mode=%s raw=0x%08x resources_off=%d icc_off=%d rc=%d\n",
+			 (fifo_disable & BIT(0)) ? "GSI" : "FIFO",
+			 fifo_disable, off_rc, icc_rc, ret);
 		if (ret)
-			goto exit_wakeup_unregister;
+			goto err;
+		dev_info(&pdev->dev,
+			 "P473 UART ttyHS0 ready source=real-5.10-uart wake_irq=%d wake_byte=0x%02x rc=0\n",
+			 port->wakeup_irq, wake_byte);
 	}
 
-	uport->private_data = (void *)drv;
-	platform_set_drvdata(pdev, dev_port);
-	if (is_console) {'''
-    return replace_once(s, anchor, new, "UART before tty registration")
+'''
+    s = replace_once(s, anchor, gate + anchor, "UART pre-registration gate")
+    p = s.index("static int qcom_geni_serial_probe(")
+    nextfn = s.index("static int qcom_geni_serial_remove(", p)
+    seg = s[p:nextfn]
+    if not seg.index("P473_B0_NATIVE_SE1_FIFO_GUARD_V2") < seg.index("uart_add_one_port("):
+        raise RuntimeError("P473 native hardware gate is after TTY registration")
+    if '"ttyHS"' not in s:
+        raise RuntimeError("P473 5.10 real ttyHS UART device name missing")
+    return s
 
 def stage(root, tg):
-    rev = subprocess.check_output(
-        ["git", "-C", str(tg), "rev-parse", "HEAD"], text=True).strip()
+    rev = subprocess.check_output(["git", "-C", str(tg), "rev-parse", "HEAD"], text=True).strip()
     if rev != TG_SHA:
-        raise RuntimeError("P473 TG source revision mismatch " + rev)
-    for p in (UART_PATH, BT_PATH):
-        if (root / p).exists():
-            raise RuntimeError(f"P473 potential duplicate owner: {p}")
-    bt_hdr = tg / HEADER
-    if not bt_hdr.is_file():
-        raise RuntimeError("P473 canonical TG BT ioctl ABI header absent")
+        raise RuntimeError("P473 TG source revision mismatch: " + rev)
+    uart = root / UART
+    if not uart.is_file():
+        raise RuntimeError("P473 GKI 5.10 UART provider absent")
+    btsrc = tg / "drivers/bluetooth/bluetooth-power.c"
+    hdr = tg / HEADER
+    if not btsrc.is_file() or not hdr.is_file():
+        raise RuntimeError("P473 pinned TG btpower ABI missing")
+    if (root / BT).exists():
+        raise RuntimeError("P473 duplicate BTPOWER provider")
     if (root / HEADER).exists():
-        if (root / HEADER).read_bytes() != bt_hdr.read_bytes():
-            raise RuntimeError("P473 unsafe existing BT power header differs from TG")
+        if (root / HEADER).read_bytes() != hdr.read_bytes():
+            raise RuntimeError("P473 BT power ioctl header already differs from pinned TG")
     else:
-        shutil.copy2(bt_hdr, root / HEADER)
+        shutil.copy2(hdr, root / HEADER)
+    bt = btsrc.read_text()
+    for name in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
+                 "BT_CMD_GETVAL_POWER_SRCS", ".compat_ioctl = bt_ioctl"):
+        if name not in bt:
+            raise RuntimeError("P473 TG ioctl ABI drift " + name)
 
-    target_geni = root / GENI
-    tg_geni = tg / GENI
-    if not target_geni.is_file() or not tg_geni.is_file():
-        raise RuntimeError("P473 missing real QCOM GENI 5.10 header/provider")
-    # In particular, don't overwrite the 5.10 header used by existing
-    # UART/I2C/SPI controllers; failing compile is better than corrupting them.
-    for needed in ("GENI_IF_FIFO_DISABLE_RO", "FIFO_IF_DISABLE",
-                   "struct se_geni_rsc", "se_geni_resources_on",
-                   "se_geni_resources_off"):
-        if needed not in target_geni.read_text():
-            raise RuntimeError("P473 real 5.10 GENI API missing " + needed)
-
-    src = tg / "drivers/tty/serial/msm_geni_serial.c"
-    bt = tg / "drivers/bluetooth/bluetooth-power.c"
-    if not src.is_file() or not bt.is_file():
-        raise RuntimeError("P473 TG driver input absent")
-    for x in ("ttyHS", "qcom,msm-geni-serial-hs", "qcom,wakeup-byte"):
-        if x not in src.read_text():
-            raise RuntimeError("P473 actual TG HS UART source drift " + x)
-    for x in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
-              "BT_CMD_CHECK_SW_CTRL", "BT_CMD_GETVAL_POWER_SRCS",
-              ".compat_ioctl = bt_ioctl"):
-        if x not in bt.read_text():
-            raise RuntimeError("P473 actual TG btpower source drift " + x)
-
-    (root / UART_PATH).write_text(patch_uart(src.read_text()))
-    (root / BT_PATH).write_bytes(bt.read_bytes())
-    um, uk = root / "drivers/tty/serial/Makefile", root / "drivers/tty/serial/Kconfig"
-    bm, bk = root / "drivers/bluetooth/Makefile", root / "drivers/bluetooth/Kconfig"
-    for file in (um, uk, bm, bk):
-        if not file.is_file():
-            raise RuntimeError("P473 missing native Kbuild file " + str(file))
-    um.write_text(um.read_text() + "\n# " + MARK +
-                  "\nobj-$(CONFIG_P473_TG_HSUART) += msm_geni_serial_p473.o\n")
-    uk.write_text(uk.read_text() + "\n" + UK)
-    bm.write_text(bm.read_text() +
+    uart.write_text(patch_uart(uart.read_text()))
+    (root / BT).write_text(bt)
+    km, kc = root / "drivers/bluetooth/Makefile", root / "drivers/bluetooth/Kconfig"
+    if "config P473_TG_BTPOWER" in kc.read_text():
+        raise RuntimeError("P473 double Kconfig stage")
+    km.write_text(km.read_text() + "\n# " + MARK +
                   "\nobj-$(CONFIG_P473_TG_BTPOWER) += bluetooth_power_p473.o\n")
-    bk.write_text(bk.read_text() + "\n" + BK)
+    kc.write_text(kc.read_text() + "\n" + BT_KCONFIG)
 
 def check(root):
-    u = (root / UART_PATH).read_text()
-    bt = (root / BT_PATH).read_text()
-    if MARK not in u or not (root / HEADER).is_file():
-        raise RuntimeError("P473 native sources absent")
-    if not u.index("GENI_IF_FIFO_DISABLE_RO") < u.index("ret = uart_add_one_port(drv, uport);"):
-        raise RuntimeError("P473 ttyHS registered before FIFO gate")
-    for token in ("se_geni_resources_on(&dev_port->serial_rsc)",
-                  "se_geni_resources_off(&dev_port->serial_rsc)",
-                  "P473 UART ttyHS0 probe mode=%s",
-                  "qcom,msm-geni-serial-hs"):
-        if token not in u:
-            raise RuntimeError("P473 UART native gate missing " + token)
-    for token in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
-                  "BT_CMD_GETVAL_POWER_SRCS", '"btpower"'):
-        if token not in bt:
-            raise RuntimeError("P473 BT native ioctl missing " + token)
-    for path, expected in (
-        ("drivers/tty/serial/Makefile", "obj-$(CONFIG_P473_TG_HSUART)"),
-        ("drivers/bluetooth/Makefile", "obj-$(CONFIG_P473_TG_BTPOWER)"),
-        ("drivers/tty/serial/Kconfig", "config P473_TG_HSUART"),
-        ("drivers/bluetooth/Kconfig", "config P473_TG_BTPOWER")
-    ):
-        if expected not in (root / path).read_text():
-            raise RuntimeError("P473 native Kbuild missing " + expected)
+    s = (root / UART).read_text()
+    bt = (root / BT).read_text()
+    a = s.index("static int qcom_geni_serial_probe(")
+    b = s.index("static int qcom_geni_serial_remove(", a)
+    seg = s[a:b]
+    if s.count(MARK) != 1:
+        raise RuntimeError("P473 native mode gate missing or duplicated")
+    if not seg.index(MARK) < seg.index("uart_add_one_port("):
+        raise RuntimeError("P473 native TTY created before FIFO gate")
+    for name in ("geni_icc_enable(&port->se)", "geni_se_resources_on(&port->se)",
+                 "geni_se_resources_off(&port->se)", "geni_icc_disable(&port->se)",
+                 "readl_relaxed(uport->membase + 0x64)",
+                 "P473 UART ttyHS0 probe mode=%s", "wake_byte != 0xfd",
+                 "P473 UART ttyHS0 ready"):
+        if name not in seg:
+            raise RuntimeError("P473 missing actual 5.10 hardware operation " + name)
+    if 'dev_name = "ttyHS"' not in s or s.count('"qcom,msm-geni-serial-hs"') != 2:
+        raise RuntimeError("P473 5.10 ttyHS or legacy DT binding not established")
+    if "config P473_TG_BTPOWER" not in (root / "drivers/bluetooth/Kconfig").read_text():
+        raise RuntimeError("P473 true Bluetooth power not configured")
+    if "obj-$(CONFIG_P473_TG_BTPOWER) += bluetooth_power_p473.o" not in (root / "drivers/bluetooth/Makefile").read_text():
+        raise RuntimeError("P473 Bluetooth power not linked")
+    for name in ("BT_CMD_PWR_CTRL", "BT_CMD_CHIPSET_VERS",
+                 "BT_CMD_GETVAL_POWER_SRCS", '"btpower"'):
+        if name not in bt:
+            raise RuntimeError("P473 real BTPOWER missing " + name)
     return {
-        "phase": "P473-B0-NATIVE",
-        "tg_revision": TG_SHA,
-        "btpower_real_tg": True, "uart_real_tg": True,
-        "se1_fifo_guard_before_tty": True,
-        "se9_console_untouched": True,
-        "requested_device_nodes": ["/dev/btpower", "/dev/ttyHS0"],
-        "kernel_image_link": "PENDING",
-        "actual_se1_fifo_mode": "PENDING HARDWARE",
-        "bluetooth_firmware": "B1 NOT IN SCOPE",
+        "phase": "P473-B0-NATIVE-V2", "TG_revision": TG_SHA,
+        "btpower": "unchanged pinned TouchGrass vendor source",
+        "uart": "actual 5.10 qcom_geni_serial.c plus SE1-only hardware gate",
+        "owner": "existing ttyHS UART, no duplicate driver",
+        "fifo_reg": "MMIO 0x64 bit0, read only after ICC/clock enable",
+        "safety": "SE1 0x884000 alias0 wake byte 0xfd and wake IRQ required; SE9 untouched",
+        "native_link": "PENDING",
+        "HAL_runtime": "UNVERIFIED",
         "flash_authorized": False
     }
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--root", required=True, type=Path)
     p.add_argument("--tg", type=Path)
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--report", type=Path)
-    o = p.parse_args()
-    if not o.check_only:
-        if not o.tg:
+    args = p.parse_args()
+    if not args.check_only:
+        if not args.tg:
             p.error("--tg required for staging")
-        stage(o.root, o.tg)
-    rec = check(o.root)
-    if o.report:
-        o.report.parent.mkdir(parents=True, exist_ok=True)
-        o.report.write_text(json.dumps(rec, indent=2, sort_keys=True)+"\n")
-    print("P473 B0 genuine TG Bluetooth and SE1 HS UART native sources staged; link pending")
+        stage(args.root, args.tg)
+    data = check(args.root)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(data, sort_keys=True, indent=2)+"\n")
+    print("P473 B0: existing GKI ttyHS real UART + strict SE1 FIFO gate, TG btpower staged")
 
 if __name__ == "__main__":
     main()
