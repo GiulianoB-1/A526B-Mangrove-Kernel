@@ -71,6 +71,27 @@ jobs:
           }, indent=2) + "\n")
           print("P473 B0 TG BTPOWER ioctl and GENI SE1 FIFO source guards PASS; no 5.10 link")
           PY
+      - name: Smoke-check P473 native 5.10 SE1 patch against exact pinned GKI source
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/473_b0_native.py
+          curl --fail --location --retry 4 --silent --show-error \
+            "https://android.googlesource.com/kernel/common/+/f960ed27302b1ff8e61e152fc202554d778deccd/drivers/tty/serial/qcom_geni_serial.c?format=TEXT" \
+            -o output/p473-gki-uart.base64
+          base64 --decode output/p473-gki-uart.base64 > output/p473-gki-uart.orig.c
+          python3 - <<'PY'
+          from pathlib import Path
+          import runpy
+          stage = runpy.run_path("scripts/473_b0_native.py")
+          original = Path("output/p473-gki-uart.orig.c").read_text()
+          adapted = stage["patch_uart"](original)
+          assert adapted.count("P473_B0_NATIVE_SE1_FIFO_GUARD_V2") == 1
+          assert "geni_se_resources_on(&port->se)" in adapted
+          assert 'devm_clk_get(&pdev->dev, "se-clk")' in adapted
+          assert adapted.index("P473_B0_NATIVE_SE1_FIFO_GUARD_V2") < adapted.index("uart_add_one_port(")
+          Path("output/P473-B0-5.10-SE1-PATCHED.c").write_text(adapted)
+          print("P473 native GKI exact-revision UART patch anchor PASS, Image link still pending")
+          PY
       - name: Summary
         if: always()
         run: |
