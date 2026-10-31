@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P470-A6 real TG msm_bus RPMh IPA5x5 client and native link diagnostic; NO FLASH
+run-name: P470-A6b MSS SSR descriptor ABI guard, provider ownership, dev_info crash fix; NO FLASH
 on:
   push:
     branches:
@@ -24,6 +24,7 @@ on:
       - agent/p470a4b-merged-dt-modem-policy-no-flash
       - agent/p470a5-lagoon-legacy-bus-vote-gate-no-flash
       - agent/p470a6-tg-msm-bus-real-votes-firstflash-gated
+      - agent/p470a6b-mss-ssr-desc-abi-guard-no-flash
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -110,7 +111,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py
+          python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
           python3 scripts/465_fastrpc_mmap_guard.py --selftest
@@ -1559,6 +1560,15 @@ jobs:
           test -s "$BUILD/vmlinux"
           test -s "$BUILD/arch/arm64/boot/Image"
           test -s "$BUILD/Module.symvers"
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 \
+            drivers/remoteproc/qcom_q6v5_pas.i \
+            drivers/a52_pil/subsystem_restart.i >/dev/null
+          cp "$BUILD/drivers/remoteproc/qcom_q6v5_pas.i" \
+            phase447-inventory/P470-A6B-P469B-PAS.i
+          cp "$BUILD/drivers/a52_pil/subsystem_restart.i" \
+            phase447-inventory/P470-A6B-P469B-SSR.i
           # Read the actual post-P468 boot-stage DTB. A failed static audit
           # produces blockers, never silent FLASH approval.
           python3 scripts/470_a4_dtb_audit.py \
@@ -1615,6 +1625,8 @@ jobs:
           python3 scripts/470_a6_tg_msm_bus_votes.py --root "$ROOT" \
             --report phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
           python3 scripts/470_a6_tg_msm_bus_votes.py --root "$ROOT" --check-only
+          # P470-A6b #678 forensics: compile EXACT P470-A6 source sequence,
+          # BEFORE applying the A6b patch. A4 DMA diagnostics belong to A6.
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" \
             --report phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
           python3 scripts/470_a4_dma_iova_trace.py --root "$ROOT" --check-only
@@ -1623,6 +1635,34 @@ jobs:
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 olddefconfig
+          echo 'P470-A6b rebuilding #678 A6-only native Image for DWARF fault forensics; absolutely no flash.' >> "$GITHUB_STEP_SUMMARY"
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image
+          mkdir -p phase447-inventory/P470-A6B-678-FORENSICS
+          cp "$BUILD/vmlinux" phase447-inventory/P470-A6B-678-FORENSICS/vmlinux
+          cp "$BUILD/System.map" phase447-inventory/P470-A6B-678-FORENSICS/System.map
+          python3 scripts/470_a6b_678_addr2line.py \
+            --vmlinux "$BUILD/vmlinux" --system-map "$BUILD/System.map" \
+            --out phase447-inventory/P470-A6B-678-FORENSICS
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 \
+            drivers/remoteproc/qcom_q6v5_pas.i \
+            drivers/a52_pil/subsystem_restart.i >/dev/null
+          cp "$BUILD/drivers/remoteproc/qcom_q6v5_pas.i" \
+            phase447-inventory/P470-A6B-A6-678-PAS.i
+          cp "$BUILD/drivers/a52_pil/subsystem_restart.i" \
+            phase447-inventory/P470-A6B-A6-678-SSR.i
+          # A6b: A6 SCM-enabled deferred MSS probe crashed in __dev_printk.
+          # Allocate TG SSR descriptor in SSR .o, check PAS-side ABI, use
+          # stable &pdev->dev. Preserve previously packaged P469b boot.
+          python3 scripts/470_a6b_mss_ssr_abi_guard.py --root "$ROOT" \
+            --report phase447-inventory/P470-A6B-MSS-SSR-ABI-GUARD.json
+          python3 scripts/470_a6b_mss_ssr_abi_guard.py --root "$ROOT" --check-only
+          # A6 was compiled immediately above: only the A6b fix changes
+          # before this second, incremental native Image link.
+          # Preserve P470-A6 #678 and A6b vmlinux separately.
           for flag in CONFIG_GSI=y CONFIG_IPA3=y CONFIG_RMNET_IPA3=y; do
             grep -Fxq "$flag" "$BUILD/.config" || {
               echo "::error title=P470-A3 Kconfig rejected requested built-in driver::$flag"
@@ -1642,7 +1682,20 @@ jobs:
             echo "P470-A3 native built-in link FAILED rc=$RC; NO FLASH" | tee -a "$LOG"
             exit "$RC"
           fi
-          for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping msm_bus_scale_register_client msm_bus_scale_client_update_request msm_bus_scale_unregister_client; do
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 \
+            drivers/remoteproc/qcom_q6v5_pas.i \
+            drivers/a52_pil/subsystem_restart.i >/dev/null
+          python3 scripts/470_a6b_ssr_preprocessed_audit.py \
+            --baseline-pas phase447-inventory/P470-A6B-P469B-PAS.i \
+            --baseline-ssr phase447-inventory/P470-A6B-P469B-SSR.i \
+            --a6-pas phase447-inventory/P470-A6B-A6-678-PAS.i \
+            --a6-ssr phase447-inventory/P470-A6B-A6-678-SSR.i \
+            --a6b-pas "$BUILD/drivers/remoteproc/qcom_q6v5_pas.i" \
+            --a6b-ssr "$BUILD/drivers/a52_pil/subsystem_restart.i" \
+            --out phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
+          for symbol in ipa_fmwk_register_ipa ipa3_get_ep_mapping msm_bus_scale_register_client msm_bus_scale_client_update_request msm_bus_scale_unregister_client a52_p470_ssr_desc_alloc a52_p470_ssr_desc_free; do
             grep -Eq "[[:space:]]$symbol$" "$BUILD/System.map" || {
               echo "::error title=P470-A3 real built-in provider not linked::$symbol"
               exit 1
@@ -1657,14 +1710,16 @@ jobs:
             "P470 IPA BUS register client=%u cases=5 paths=5" \
             "P470 IPA BUS vote case=%d rc=%d" \
             "P470 IPA BUS VOTE_FAILED" \
-            "P470 IPA BUS TABLE state="; do
+            "P470 IPA BUS TABLE state=" \
+            "P470-A6b SSR ABI MISMATCH" \
+            "P470-A6b PAS ABI qcom_adsp_size="; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P470-A4 missing linked safety marker::$marker"
               exit 1
             }
           done
           test "$(stat -c '%a' "$ROOT/include/linux/a52_ipa_arm.h" >/dev/null; grep -Fc '__ATTR(enable, 0200' "$ROOT/drivers/platform/msm/ipa/ipa_v3/ipa.c")" = 1
-          echo 'P470-A6 actual Phase252 TG msm_bus API linked, five legacy IPA routes validated, real RPMh client/votes installed, runtime unproven. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P470-A6b SSR allocated in its own compilation unit, checked PAS/TG struct ABI, stable &pdev->dev; P469b fallback unchanged. SCM ADSP hardware retest REQUIRED.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           python3 scripts/470_a2_flashability_gate.py \
             --root "$ROOT" --build "$BUILD" \
@@ -1677,14 +1732,22 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img \
+            --output phase447b-variants/MANGROVE-P470-A6B-MSS-SSR-ABI-REVIEW.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img \
+            --candidate phase447b-variants/MANGROVE-P470-A6B-MSS-SSR-ABI-REVIEW.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+          cp "$BUILD/vmlinux" phase447b-variants/P470-A6B-FLASH-CANDIDATE.vmlinux
+          cp "$BUILD/System.map" phase447b-variants/P470-A6B-FLASH-CANDIDATE.System.map
+          readelf -SW phase447b-variants/P470-A6B-FLASH-CANDIDATE.vmlinux | grep -F .debug_info
+          sha256sum phase447b-variants/P470-A6B-FLASH-CANDIDATE.vmlinux \
+                    phase447b-variants/P470-A6B-FLASH-CANDIDATE.System.map \
+                    phase447b-variants/MANGROVE-P470-A6B-MSS-SSR-ABI-REVIEW.boot.img \
+            > phase447-inventory/P470-A6B-FLASH-CANDIDATE-SYMBOLS.sha256
+          echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
           python3 - <<'PY'
@@ -1703,18 +1766,30 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW-${{ github.run_number }}
+          name: MANGROVE-P470-A6B-MSS-SSR-ABI-REVIEW-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P470-A6-IPA-RPMH-FIRSTBOOT-REVIEW.boot.img
+            phase447b-variants/MANGROVE-P470-A6B-MSS-SSR-ABI-REVIEW.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+            phase447b-variants/P470-A6B-FLASH-CANDIDATE.vmlinux
+            phase447b-variants/P470-A6B-FLASH-CANDIDATE.System.map
+            phase447-inventory/P470-A6B-FLASH-CANDIDATE-SYMBOLS.sha256
           if-no-files-found: error
           compression-level: 1
+      - name: Upload P470-A6b #678 source-equivalent DWARF forensic rebuild (NO FLASH)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A6B-678-B710980D-FAULT-DECODE-${{ github.run_number }}
+          path: |
+            phase447-inventory/P470-A6B-678-FORENSICS/
+          if-no-files-found: warn
+          compression-level: 6
       - name: Upload P470-A3 native built-in link diagnostics (NO IMAGE)
         if: always() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P470-A3-BUILTIN-NO-FLASH-${{ github.run_number }}
+          name: MANGROVE-P470-A6B-BUILTIN-SSR-ABI-DIAGNOSTICS-${{ github.run_number }}
           path: |
             phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
             phase447-inventory/P470-A4-ARM-MSS-READY.json
@@ -1724,6 +1799,8 @@ jobs:
             phase447-inventory/P470-A5-LEGACY-BUS-VOTE-BLOCKER.json
             phase447-inventory/P470-A5-LIVE-FDT-ABI.json
             phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
+            phase447-inventory/P470-A6B-MSS-SSR-ABI-GUARD.json
+            phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
@@ -1736,5 +1813,7 @@ jobs:
             scripts/470_a5_live_ipa_audit.py
             scripts/470_a6_tg_msm_bus_votes.py
             scripts/470_a6_candidate_gate.py
+            scripts/470_a6b_mss_ssr_abi_guard.py
+            scripts/470_a6b_ssr_preprocessed_audit.py
           if-no-files-found: warn
           compression-level: 6
