@@ -37,3 +37,6 @@ Pinned inputs:
 ## D2: on-phone proof needed
 
 Record `ip -d link show rmnet_data0`, `ip addr show rmnet_data0`, `ip route`, netmgr/RILD logcat showing data-format and rtnetlink return codes, `/sys/class/net/rmnet_ipa0/statistics/{rx_packets,tx_packets,rx_bytes,tx_bytes}`, `dmesg | grep -E 'P471|ipa|gsi|rmnet|SMMU|IOMMU'`. Require a real IP, ping/browsing, and 10-minute stability before accepting P471.
+
+
+D1b addendum: see docs/p471-d1b-tg-flags-netfilter-addendum.md. TG SHS/PERF and QMI/DFC are built-in, stale vendor module-load errors also happen on TG. The pinned 5.10 donor contains DFC/QMI but not SHS/PERF. The new CI audit records both Qualcomm flag patterns and an exact TG-vs-5.10 netfilter delta. Do not claim hardware data success or enable IPA autostart from a source-only result.

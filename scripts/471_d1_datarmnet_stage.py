@@ -37,7 +37,8 @@ def files_from_donor(donor, target):
     mk = (src / "Kbuild").read_text()
     for v in ("obj-m += rmnet_core.o", "obj-m += rmnet_ctl.o",
               "rmnet_core-y :=", "rmnet_ctl-y :=",
-              "rmnet_ctl_ipa.o", "wda_qmi.o", "dfc_qmap.o"):
+              "rmnet_ctl_ipa.o", "wda_qmi.o", "qmi_rmnet.o",
+              "dfc_qmi.o", "dfc_qmap.o"):
         if v not in mk:
             raise RuntimeError("P471 donor Kbuild drift: " + v)
     shutil.copytree(src, target)
@@ -86,9 +87,10 @@ static int rmnet_newlink(struct net *src_net, struct net_device *dev,
         flags = fmt->flags & fmt->mask;
     }
     rc = p471_rmnet_newlink_impl(src_net, dev, tb, data, extack);
-    pr_info("P471 RMNET LINK add name=%s parent=%s mux=%u flags=0x%x rc=%d\n",
+    pr_info("P471 RMNET LINK add name=%s parent=%s mux=%u flags=0x%x rc=%d raw=0x%x mask=0x%x\n",
             dev ? dev->name : "NULL",
-            real_dev ? real_dev->name : "NULL", mux, flags, rc);
+            real_dev ? real_dev->name : "NULL", mux, flags, rc,
+            fmt ? fmt->flags : 0, fmt ? fmt->mask : 0);
     return rc;
 }
 
@@ -280,6 +282,9 @@ def check(root):
         "donor_sha": DONOR_SHA, "donor_provider": "Qualcomm datarmnet core+ctl",
         "vendor_rtnetlink": ["MUX_ID", "FLAGS", "DFC_QOS", "UL_AGG_PARAMS"],
         "real_rtnetlink_rc": True, "wan_ioctl_rc": True,
+        "qmi_wda_dfc_objects": ["qmi_rmnet.o", "wda_qmi.o", "dfc_qmi.o", "dfc_qmap.o"],
+        "vendor_format_patterns": ["0x80000071", "0xC4000071"],
+        "vendor_flags_runtime_verified": False,
         "actual_gsi_channel_in_trace": True,
         "first_rx_tx_counters": True,
         "perf_shs_offload": "not built", "selinux": "unchanged",
