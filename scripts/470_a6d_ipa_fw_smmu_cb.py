@@ -78,16 +78,16 @@ def patch(s):
         raise RuntimeError("P470-A6d IPA already modified")
     # Must be the A6c source, not raw donor or older A6b.
     for required in ("P470 IPA ARM", "P470 IPA FW_LOAD",
-                     "P470_A6_LEGACY", "P470 IPA GSI READY"):
+                     "P470_A6_TG_LEGACY_RPMH_CLIENT_V1", "P470 IPA GSI READY"):
         if required not in s:
             raise RuntimeError("P470-A6d expected A6c source missing " + required)
     s = once(s, "#include <linux/of.h>", "#include <linux/of.h>\n#include <linux/ktime.h>\n#include <linux/math64.h>\n#include <linux/bitops.h>",
              "ktime and DT APIs")
 
     # Functions below follow static smmu_info/smmu_cb definitions and ipa_i.h.
-    s = once(s, "static void ipa_smmu_update_fw_loader(void)",
-             HELPER + "\nstatic void ipa_smmu_update_fw_loader(void)",
-             "CB sibling discovery helper")
+    s = once(s, "#define IPA_SUSPEND_BUSY_TIMEOUT (msecs_to_jiffies(10))",
+             "#define IPA_SUSPEND_BUSY_TIMEOUT (msecs_to_jiffies(10))\n" + HELPER,
+             "CB sibling discovery and FW timing globals before use")
     before = '''\tresult = of_property_read_u32(pdev->dev.of_node,
 \t\t"qcom,max_num_smmu_cb",
 \t\t&ipa_drv_res->max_num_smmu_cb);
