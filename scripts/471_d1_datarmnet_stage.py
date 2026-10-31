@@ -44,18 +44,21 @@ def files_from_donor(donor, target):
         if v not in mk:
             raise RuntimeError("P471 donor Kbuild drift: " + v)
     shutil.copytree(src, target)
-    # TRACE_INCLUDE_PATH is evaluated from include/trace/define_trace.h,
-    # not the directory containing rmnet_trace.h. The donor hardcodes an
-    # Android vendor path which does not exist in the in-tree 5.10 port.
-    trace_hdr = target / "rmnet_trace.h"
-    trace = trace_hdr.read_text()
-    trace = once(
-        trace,
-        "#define TRACE_INCLUDE_PATH " + DONOR_TRACE_INCLUDE_PATH,
-        "#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH,
-        "donor trace include path",
-    )
-    trace_hdr.write_text(trace)
+    # TRACE_INCLUDE_PATH is evaluated from include/trace/define_trace.h.
+    # All three pinned Qualcomm tracepoint headers use the donor's vendor
+    # path; keep real tracepoints while relocating them into the kernel.
+    for header_name in ("rmnet_trace.h", "wda.h", "dfc.h"):
+        trace_hdr = target / header_name
+        trace = trace_hdr.read_text()
+        trace = once(
+            trace,
+            "#define TRACE_INCLUDE_PATH " + DONOR_TRACE_INCLUDE_PATH,
+            "#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH,
+            "donor trace include path: " + header_name,
+        )
+        if "#include <trace/define_trace.h>" not in trace:
+            raise RuntimeError("P471 tracepoint header drift: " + header_name)
+        trace_hdr.write_text(trace)
     # This is not an external module: both objects must link into vmlinux.
     mk = mk.replace("obj-m += rmnet_core.o",
                     "obj-$(CONFIG_P471_RMNET_CORE) += rmnet_core.o")
@@ -315,14 +318,24 @@ def check(root):
     ip = (root / RMNET).read_text()
     fd = (root / WAN).read_text()
     c = (core / "rmnet_config.c").read_text()
-    trace = (core / "rmnet_trace.h").read_text()
-    if trace.count("#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH) != 1:
-        raise RuntimeError("P471 trace header must use in-tree include path")
-    if DONOR_TRACE_INCLUDE_PATH in trace:
-        raise RuntimeError("P471 stale vendor trace header path")
-    trace_target = (root / "include/trace" / TRACE_INCLUDE_PATH / "rmnet_trace.h").resolve()
-    if trace_target != (core / "rmnet_trace.h").resolve() or not trace_target.is_file():
-        raise RuntimeError("P471 trace path does not resolve from define_trace.h")
+    # Verify every donor tracepoint header from the actual define_trace.h
+    # include directory before an expensive full kernel build.
+    for header_name in ("rmnet_trace.h", "wda.h", "dfc.h"):
+        trace = (core / header_name).read_text()
+        if trace.count("#define TRACE_INCLUDE_PATH " + TRACE_INCLUDE_PATH) != 1:
+            raise RuntimeError("P471 stale tracepoint path: " + header_name)
+        if DONOR_TRACE_INCLUDE_PATH in trace:
+            raise RuntimeError("P471 donor vendor path remains in " + header_name)
+        if trace.count("#define TRACE_INCLUDE_FILE " + header_name.removesuffix(".h")) != 1:
+            raise RuntimeError("P471 tracepoint name drift: " + header_name)
+        trace_target = (root / "include/trace" / TRACE_INCLUDE_PATH / header_name).resolve()
+        if trace_target != (core / header_name).resolve() or not trace_target.is_file():
+            raise RuntimeError("P471 trace path cannot resolve: " + header_name)
+    # Reject any other inherited vendor trace paths rather than chasing
+    # failed individual compilation units one at a time.
+    for trace_hdr in core.glob("*.h"):
+        if DONOR_TRACE_INCLUDE_PATH in trace_hdr.read_text():
+            raise RuntimeError("P471 unconverted vendor trace path: " + trace_hdr.name)
     for need in ("P471 RMNET LINK add name=", "parent=%s mux=%u flags=0x%x rc=%d",
                  "IFLA_RMNET_DFC_QOS", "IFLA_RMNET_UL_AGG_PARAMS",
                  "p471_rmnet_newlink_impl"):
