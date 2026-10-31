@@ -240,6 +240,23 @@ def patch_core(target):
     )
     genl.write_text(gs)
 
+    # In the target 5.10 build DEBUG_FS is disabled and debugfs_create_u8()
+    # has a void stub. Its return value is never required for teardown:
+    # debugfs_remove_recursive(dbgfs_dir) already owns the child.
+    # Keep the operation when DEBUG_FS is enabled, but do not assign void.
+    ctl = target / "rmnet_ctl_client.c"
+    cs = ctl.read_text()
+    cs = once(cs, "\tstruct dentry *dbgfs_loglvl;\n", "",
+              "remove unused debugfs loglevel dentry")
+    cs = once(cs, "\t\t\tctl_ep.dbgfs_loglvl = debugfs_create_u8(",
+              "\t\t\tdebugfs_create_u8(",
+              "5.10-compatible debugfs u8 call")
+    cs = once(cs, "\t\tctl_ep.dbgfs_loglvl = NULL;\n", "",
+              "remove unused debugfs loglevel cleanup")
+    if "debugfs_remove_recursive(ctl_ep.dbgfs_dir)" not in cs:
+        raise RuntimeError("P471 rmnet_ctl debugfs recursive cleanup lost")
+    ctl.write_text(cs)
+
 def patch_ipa(root):
     p = root / RMNET
     s = p.read_text()
@@ -355,6 +372,13 @@ def check(root):
     if 'obj-$(CONFIG_P471_RMNET_CORE) += rmnet_p471/' not in mk:
         raise RuntimeError("P471 core not linked")
     # Fail before any expensive compile if Kbuild would override Makefile.
+    ctl = (core / "rmnet_ctl_client.c").read_text()
+    if ctl.count("debugfs_create_u8(") != 1:
+        raise RuntimeError("P471 rmnet ctl debugfs call absent or duplicated")
+    if "dbgfs_loglvl" in ctl or "ctl_ep.dbgfs_loglvl =" in ctl:
+        raise RuntimeError("P471 rmnet ctl still assigns void debugfs result")
+    if "debugfs_remove_recursive(ctl_ep.dbgfs_dir)" not in ctl:
+        raise RuntimeError("P471 rmnet ctl lost recursive debugfs cleanup")
     genl = (core / "rmnet_genl.c").read_text()
     for required in (
         "[RMNET_CORE_GENL_ATTR_PID_BPS] = { .type = NLA_BINARY",
