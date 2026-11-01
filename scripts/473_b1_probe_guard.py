@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 
 UART = Path("drivers/tty/serial/qcom_geni_serial.c")
+GENI_C = Path("drivers/soc/qcom/qcom-geni-se.c")
+GENI_H = Path("include/linux/qcom-geni-se.h")
 BT = Path("drivers/bluetooth/bluetooth_power_p473.c")
 MARK = "P473_B1_SE1_WRAPPER0_BUS_ALIAS_FAILCLOSED_V1"
 
@@ -22,7 +24,8 @@ HELPER = r'''
  * qcom,wrapper-core phandle resolves to wrapper0 at 0x8c0000, whose
  * platform device has no upstream struct geni_wrapper drvdata.
  * Locally supply the two AHB clocks using the SE1 node; never dereference
- * dev_get_drvdata(/soc).  No global wrapper-provider changes.
+ * dev_get_drvdata(/soc).  The original private GENI wrapper layout is
+ * promoted to the shared header, identical for the native provider.
  */
 struct p473_b1_ctx {
 	struct geni_wrapper wrapper;
@@ -158,13 +161,13 @@ def patch_uart(s):
     s = replace_once(s, "#include <linux/qcom-geni-se.h>\n",
                      "#include <linux/qcom-geni-se.h>\n" + INCLUDES,
                      "UART include")
-    # 'res' is already declared by the pinned probe. Before any port
-    # allocation, override the absent SE1 hsuart alias by REG, not by DT.
+    # Checked against pinned Android common 5.10 f960ed2730: there is
+    # exactly one get_port_from_line(line, console) in the probe.
     entry = "\tport = get_port_from_line(line, console);"
-    if entry not in s:
-        entry = "\tport = get_port_from_line(line, data->console);"
-    if entry not in s:
-        raise RuntimeError("P473 B1 missing line selection anchor")
+    probe = s[s.index("static int qcom_geni_serial_probe("):
+              s.index("static int qcom_geni_serial_remove(")]
+    if probe.count(entry) != 1 or "get_port_from_line(line, data->console)" in probe:
+        raise RuntimeError("P473 B1 pinned 5.10 probe line selection drift")
     reg_gate = r'''	/* P473 B1: Samsung compatible also matches SE9.  Reject it
 	 * before accessing any resources, and never edit DT aliases.
 	 */
@@ -203,31 +206,60 @@ def patch_uart(s):
 		port->se.wrapper = dev_get_drvdata(pdev->dev.parent);
 	}'''
     s = replace_once(s, old, new, "null /soc wrapper")
-    # SE1's clock is "se-clk"; the OPP helper must not re-select "se".
-    # No SE1 OPP table is needed for the guarded FIFO probe.
-    pat = (r'\tret = devm_pm_opp_set_clkname\(&pdev->dev, "se"\);'
-           r'\s*if \(ret\)\s*return ret;\s*'
-           r'/\* OPP table is optional \*/\s*'
-           r'ret = devm_pm_opp_of_add_table\(&pdev->dev\);'
-           r'\s*if \(ret && ret != -ENODEV\) \{'
-           r'[^{}]*?'
-           r'\n\t\}')
-    matches = list(re.finditer(pat, s))
-    if len(matches) != 1:
-        raise RuntimeError("P473 B1 OPP anchor count " + str(len(matches)))
-    m = matches[0]
-    s = s[:m.start()] + (
-        '\tif (!of_device_is_compatible(pdev->dev.of_node,\n'
-        '\t\t\t\t\t"qcom,msm-geni-serial-hs")) {\n' +
-        '\n'.join('\t' + l if l else '' for l in m.group().splitlines()) +
-        '\n\t} else {\n'
-        '\t\tdev_info(&pdev->dev, "P473 B1 SE1 OPP skipped se-clk used rc=0\\n");\n'
-        '\t}\n'
-    ) + s[m.end():]
+    # Pin the exact Android 5.10 OPP path. Do not skip the OPP table:
+    # set_termios and power-management use dev_pm_opp_set_rate().
+    # Preserves the original IS_ERR check, add_table and put_clkname labels.
+    opp_old = '\tport->se.opp_table = dev_pm_opp_set_clkname(&pdev->dev, "se");'
+    opp_new = r'''	port->se.opp_table = dev_pm_opp_set_clkname(&pdev->dev,
+		of_device_is_compatible(pdev->dev.of_node,
+				     "qcom,msm-geni-serial-hs") ? "se-clk" : "se");
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "qcom,msm-geni-serial-hs"))
+		dev_info(&pdev->dev, "P473 B1 SE1 OPP clk=se-clk rc=%ld\n",
+			 IS_ERR(port->se.opp_table) ?
+			 PTR_ERR(port->se.opp_table) : 0L);'''
+    probe = s[s.index("static int qcom_geni_serial_probe("):
+              s.index("static int qcom_geni_serial_remove(")]
+    for exact in (opp_old,
+                  "ret = dev_pm_opp_of_add_table(&pdev->dev);",
+                  "goto put_clkname;",
+                  "dev_pm_opp_put_clkname(port->se.opp_table);"):
+        if probe.count(exact) != 1:
+            raise RuntimeError("P473 B1 pinned OPP anchor drift: " + exact)
+    s = replace_once(s, opp_old, opp_new, "pinned OPP clkname and rate handling")
     s = replace_once(s, "static int qcom_geni_serial_probe(",
                      HELPER + "static int qcom_geni_serial_probe(",
                      "native helper")
     return s
+
+
+def patch_wrapper(geni_c, geni_h):
+    """Promote the exact private struct, never introduce a duplicate."""
+    marker = r'''struct geni_wrapper {
+	struct device *dev;
+	void __iomem *base;
+	struct clk_bulk_data ahb_clks[NUM_AHB_CLKS];
+};'''
+    # The source is pinned, and qcom-geni-se.c owns the original ABI.
+    if geni_c.count(marker) != 1 or geni_c.count("#define NUM_AHB_CLKS 2") != 1:
+        raise RuntimeError("P473 B1 pinned GENI private wrapper layout drift")
+    if geni_h.count("struct geni_wrapper;") != 1 or \
+            "struct geni_wrapper {" in geni_h:
+        raise RuntimeError("P473 B1 GENI header wrapper definition drift")
+    geni_c = replace_once(geni_c, "#define NUM_AHB_CLKS 2\n",
+                          "", "remove private NUM_AHB_CLKS")
+    geni_c = replace_once(geni_c, marker,
+                          "static_assert(NUM_AHB_CLKS == 2);\n",
+                          "promote original GENI wrapper")
+    replacement = (
+        '#include <linux/clk.h>\n'
+        '#include <linux/build_bug.h>\n'
+        '#define NUM_AHB_CLKS 2\n'
+        + marker + '\n'
+    )
+    geni_h = replace_once(geni_h, "struct geni_wrapper;", replacement,
+                          "declare shared complete GENI wrapper")
+    return geni_c, geni_h
 
 def patch_bt(s):
     start = s.index("static long bt_ioctl(")
@@ -245,56 +277,97 @@ def patch_bt(s):
         raise RuntimeError("P473 B1 BTPOWER early return bypasses trace")
     return s[:start] + fn + s[end:]
 
+# Only these diagnostic tags are reduced. Never change driver control flow.
+RATE_TAGS = ("P446M", "P461 FASTRPC", "P446S KGSL_SMMU_RPM",
+             "P446U SDE_PLANE_CHECK")
+RATE_PATHS = ("drivers/clk/qcom", "drivers/gpu", "drivers/regulator",
+              "drivers/char/adsprpc.c", "drivers/misc", "drivers/soc/qcom")
+
 def rate_limit(src):
-    # Change only diagnostic statements carrying existing phase labels.
     out = src
-    for phase in ("P446M", "P461 FASTRPC"):
-        out = re.sub(r'\bpr_warn\("' + phase,
-                     'pr_warn_ratelimited("' + phase, out)
-        out = re.sub(r'\bpr_info\("' + phase,
-                     'pr_info_ratelimited("' + phase, out)
-    return out
+    changes = 0
+    for tag in RATE_TAGS:
+        esc = re.escape(tag)
+        # Prefix must immediately start a printk format string. This
+        # excludes function names, behavior and diagnostic strings elsewhere.
+        pat = r'\b(pr_(?:warn|info|err))\s*\(\s*("'+esc+r')'
+        out, n = re.subn(pat, lambda m: m.group(1) +
+                         '_ratelimited(' + m.group(2), out)
+        changes += n
+        # Target dev_* log calls with a single same-line device argument.
+        pat = r'\b(dev_(?:warn|info|err))\s*\(\s*([^,\n]+),\s*("'+esc+r')'
+        out, n = re.subn(pat, lambda m: m.group(1) +
+                         '_ratelimited(' + m.group(2) + ', ' +
+                         m.group(3), out)
+        changes += n
+    return out, changes
 
 def stage(root):
     uart = root / UART
     bt = root / BT
-    if not uart.is_file() or not bt.is_file():
-        raise RuntimeError("P473 B1 sources missing")
+    gc = root / GENI_C
+    gh = root / GENI_H
+    for p in (uart, bt, gc, gh):
+        if not p.is_file():
+            raise RuntimeError("P473 B1 source missing: " + str(p))
     patched_uart = patch_uart(uart.read_text())
     patched_bt = patch_bt(bt.read_text())
-    # Rate-limit only exact phase-labelled instrumentation in known
-    # subsystems. Avoid modifying driver behavior or global printk config.
+    patched_gc, patched_gh = patch_wrapper(gc.read_text(), gh.read_text())
+
+    # Stage all transformations in memory before writing anything.
     targets = []
-    for folder in ("drivers/clk/qcom", "drivers/gpu/drm/msm",
-                   "drivers/char/adsprpc", "drivers/misc",
-                   "drivers/soc/qcom"):
-        base = root / folder
-        if not base.is_dir():
-            continue
-        for p in base.rglob("*.c"):
-            if p in (uart, bt):
+    seen = set()
+    counts = {}
+    for item in RATE_PATHS:
+        base = root / item
+        if base.is_file() and base.suffix == ".c":
+            candidates = [base]
+        elif base.is_dir():
+            candidates = base.rglob("*.c")
+        else:
+            raise RuntimeError("P473 B1 rate-limit path missing: " + item)
+        for p in candidates:
+            if p in seen or p in (uart, bt, gc):
                 continue
+            seen.add(p)
             c = p.read_text(errors="replace")
-            if 'P446M' not in c and 'P461 FASTRPC' not in c:
+            if not any(tag in c for tag in RATE_TAGS):
                 continue
-            new = rate_limit(c)
-            if new != c:
+            new, count = rate_limit(c)
+            if count:
                 targets.append((p, new))
-    # No file is modified until all mandatory source gates pass.
+                counts[str(p.relative_to(root))] = count
+
+    # Existing diagnostics must actually be lowered. A zero count means
+    # a changed formatter/source tree, not a successful quieting patch.
+    if not counts:
+        raise RuntimeError("P473 B1 no diagnostic sites matched")
     uart.write_text(patched_uart)
     bt.write_text(patched_bt)
+    gc.write_text(patched_gc)
+    gh.write_text(patched_gh)
     for p, c in targets:
         p.write_text(c)
-    print("P473 B1 rate-limited diagnostic files: " + str(len(targets)))
+    for name, count in sorted(counts.items()):
+        print("P473 B1 RATELIMIT file=%s count=%d" % (name, count))
+    print("P473 B1 RATELIMIT TOTAL files=%d sites=%d" %
+          (len(counts), sum(counts.values())))
+    return counts
 
 def check(root):
     u = (root / UART).read_text()
     b = (root / BT).read_text()
+    gc = (root / GENI_C).read_text()
+    gh = (root / GENI_H).read_text()
+    if "struct geni_wrapper {" in gc or gc.count("static_assert(NUM_AHB_CLKS == 2);") != 1:
+        raise RuntimeError("P473 B1 private GENI wrapper remains")
+    if gh.count("struct geni_wrapper {") != 1 or gh.count("#define NUM_AHB_CLKS 2") != 1:
+        raise RuntimeError("P473 B1 shared GENI wrapper missing")
     for marker in (MARK, "P473 B1 SE1_ONLY reg=0x884000 line=0",
                    "P473 B1 SE1_ONLY reject non-SE1",
                    "P473 B1 WRAPPER synthetic=1",
                    "P473 B1 BUS_VOTE wrapper=0x8c0000",
-                   "P473 B1 SE1 OPP skipped"):
+                   "P473 B1 SE1 OPP clk=se-clk rc="):
         if marker not in u:
             raise RuntimeError("P473 B1 UART marker missing " + marker)
     if 'P473 BTPOWER ioctl=%x rc=%d' not in b:
@@ -309,7 +382,13 @@ def check(root):
         raise RuntimeError("P473 B1 SE1 probe ordering unsafe")
     if "port->se.wrapper = dev_get_drvdata(pdev->dev.parent);" not in probe:
         raise RuntimeError("P473 B1 non-SE1 upstream path changed")
-    return {"phase": "P473-B1-SOURCE-GUARDS", "SE1_reg": "0x884000",
+    for exact in ("dev_pm_opp_set_clkname(&pdev->dev,",
+                  '"se-clk" : "se"',
+                  "dev_pm_opp_of_add_table(&pdev->dev);",
+                  "dev_pm_opp_put_clkname(port->se.opp_table);"):
+        if exact not in probe:
+            raise RuntimeError("P473 B1 OPP contract broken: " + exact)
+    return {"phase": "P473-B1-SOURCE-GUARDS-OPP-WRAPPER-V2", "SE1_reg": "0x884000",
             "SE9": "reject before TTY selection", "wrapper": "DT phandle wrapper0 0x8c0000",
             "bus_ids": ["0xb0", "0x337", "0x97", "0x200"],
             "bus": "P446Z style vote active before MMIO",
@@ -322,9 +401,13 @@ def main():
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--report", type=Path)
     args = ap.parse_args()
+    counts = None
     if not args.check_only:
-        stage(args.root)
+        counts = stage(args.root)
     data = check(args.root)
+    if counts is not None:
+        data["ratelimit_per_file"] = counts
+        data["ratelimit_total"] = sum(counts.values())
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(data, indent=2) + "\n")
