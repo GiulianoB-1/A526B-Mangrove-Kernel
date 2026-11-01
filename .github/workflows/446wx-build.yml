@@ -1719,6 +1719,20 @@ jobs:
           python3 scripts/473_b1_probe_guard.py --root "$ROOT" \
             --report phase447-inventory/P473-B1-SOURCE.json
           python3 scripts/473_b1_probe_guard.py --root "$ROOT" --check-only
+          python3 - <<'PYB1_RATE'
+          import json
+          from pathlib import Path
+          p=Path('phase447-inventory/P473-B1-SOURCE.json')
+          d=json.loads(p.read_text())
+          counts=d.get('ratelimit_per_file', {})
+          if not counts or not d.get('ratelimit_total'):
+              raise SystemExit('P473 B1 missing rate-limit per-file counts')
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('### P473 B1 diagnostic rate limits\n\n')
+              for name,count in sorted(counts.items()):
+                  f.write(f'- `{name}`: {count} callsites\n')
+              f.write(f'\nTotal: **{d["ratelimit_total"]}** callsites.\n')
+          PYB1_RATE
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
@@ -1829,7 +1843,7 @@ jobs:
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
                         'P473 B1 BUS_VOTE wrapper=0x8c0000' \
-                        'P473 B1 SE1 OPP skipped' \
+                        'P473 B1 SE1 OPP clk=se-clk rc=' \
                         'P473 BTPOWER ioctl=%x rc=%d'; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P473 B1::native Image marker missing::$marker"; exit 1;
