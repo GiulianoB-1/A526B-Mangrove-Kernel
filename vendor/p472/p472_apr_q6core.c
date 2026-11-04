@@ -208,11 +208,7 @@ static void p472_query_work(struct work_struct *work)
 			rc, !!waited);
 		return;
 	}
-	return 0;
-fail:
-	dev_set_drvdata(&rpdev->dev, NULL);
-	return rc;
-}
+	return;
 }
 
 static int p472_apr_probe(struct rpmsg_device *rpdev)
