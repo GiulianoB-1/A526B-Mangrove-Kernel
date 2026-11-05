@@ -17,6 +17,7 @@ import argparse
 from pathlib import Path
 SRC=Path("drivers/a52_447/a52_sm5714_fg_ro.c")
 TAG="A52_PHASE452_H0_MANUAL_SAFE_CHARGER_V1"
+H01_TAG="A52_PHASE452_H01_VBUS44_VERIFY_IO_V1"
 DECL=r'''
 
 
@@ -26,6 +27,8 @@ DECL=r'''
 #define A52H0_WDTCNTL 0x22
 #define A52H0_BATREG 0x1a
 #define A52H0_VBUSCNTL 0x15
+#define A52H01_MAX_BOOTLOADER_VBUSCNTL 0x44
+/* A52_PHASE452_H01_VBUS44_VERIFY_IO_V1 */
 #define A52H0_FACTORY1 0x25
 #define A52H0_CHG_FAST_500MA 0x20
 #define A52H0_FLOAT_4380_CODE 0x27
@@ -120,7 +123,7 @@ static bool a52h0_sensor_safe(struct a52d_fg *fg,int *b,int *c)
 static int a52h0_verify(struct a52d_fg *fg,bool for_enable,
                         int *vb,int *vcell,int *st2,int *ntc,int *chg_ntc)
 {
-    int st,fc,flt,ctrl,input,die;
+    int st,fc,flt,ctrl,input,die,rc=0;
     *vcell=a52d_mv(fg);
     st=a52h0_regread(fg,A52G_CHG_STATUS1);
     *st2=a52h0_regread(fg,A52P450_CHG_STATUS2);
@@ -129,26 +132,41 @@ static int a52h0_verify(struct a52d_fg *fg,bool for_enable,
     ctrl=a52h0_regread(fg,A52G_CHG_CNTL1);
     input=a52h0_regread(fg,A52H0_VBUSCNTL);
     die=a52h0_regread(fg,A52G_CHG_DEVICEID);
-    if(st<0 || *st2<0 || fc<0 || flt<0 || ctrl<0 || input<0 || die<0 ||
-       *vcell<3000 || *vcell>A52H0_OVERVOLT_FAULT_MV)
-        return -EIO;
+    /* A failed I2C read is transient. Hardware violations remain faults. */
+    if(st<0 || *st2<0 || fc<0 || flt<0 ||
+       ctrl<0 || input<0 || die<0 || *vcell<0) {
+        rc=-EAGAIN;
+        goto fail;
+    }
+    if(*vcell<3000 || *vcell>A52H0_OVERVOLT_FAULT_MV) {
+        rc=-EIO;
+        goto fail;
+    }
+    /* Read-only bootloader input ceiling, with H0 charge current 500 mA. */
     if(die!=fg->a52h0_id || (fc&(BIT(0)|BIT(1))) ||
-       (flt&0x3f)!=A52H0_FLOAT_4380_CODE || input>0x10)
-        return -EUCLEAN; /* Immutable hardware safety contract: FAULT */
+       (flt&0x3f)!=A52H0_FLOAT_4380_CODE ||
+       input>A52H01_MAX_BOOTLOADER_VBUSCNTL) {
+        rc=-EUCLEAN;
+        goto fail;
+    }
     *vb=!!(st&BIT(0));
-    if(*st2&BIT(7))return -ETIME;
-    if(*vcell>4380)return -EOVERFLOW; /* FULL, not fault until >4430 */
-    if(!a52h0_sensor_safe(fg,ntc,chg_ntc))
-        return -ERANGE;
-    if(!*vb)return -ENOLINK;
-    /* H0 prohibits VBUSCNTL writes. Refuse >500mA input rather than
-     * pretending to run TG's ramp, which requires that register.
-     */
-    /* Raw input>0x10 is already a latched FAULT. Never ramp or write VBUSCNTL. */
-    /* An expired WDT was handled before temperature checks. */
-    if(for_enable && (ctrl&A52G_CHG_ENQ4FET))
-        return -EALREADY; /* bootloader HANDOVER, not FAULT */
+    if(*st2&BIT(7)) { rc=-ETIME; goto fail; }
+    if(*vcell>4380) { rc=-EOVERFLOW; goto fail; }
+    if(!a52h0_sensor_safe(fg,ntc,chg_ntc)) {
+        rc=-ERANGE;
+        goto fail;
+    }
+    if(!*vb) { rc=-ENOLINK; goto fail; }
+    if(for_enable && (ctrl&A52G_CHG_ENQ4FET)) {
+        rc=-EALREADY;
+        goto fail;
+    }
     return 0;
+fail:
+    dev_warn(fg->dev,
+        "P452 H0.1 VERIFY_FAIL rc=%d st1=%d st2=%d factory1=%d batreg=%d vbuscntl=%d id=%d cntl1=%d vcell=%d\n",
+        rc,st,*st2,fc,flt,input,die,ctrl,*vcell);
+    return rc;
 }
 static void a52h0_tick(struct a52d_fg *fg)
 {
@@ -177,6 +195,28 @@ static void a52h0_tick(struct a52d_fg *fg)
     }
     if(fg->a52h0_killed || !fg->a52h0_armed) {
         if(fg->a52h0_active) a52h0_off(fg,"MANUAL_DISARM",false);
+        /*
+         * The first failed verify has already DISARMED and inhibited.
+         * Observe at most two further guard samples in read-only mode.
+         * Never auto re-arm after an I2C recovery.
+         */
+        if(!fg->a52h0_killed && fg->a52h0_verify_io_streak) {
+            int check_rc=a52h0_verify(fg,false,&vb,&mv,&st2,
+                                      &tbat,&tchg);
+            if(check_rc==-EAGAIN) {
+                fg->a52h0_verify_io_streak++;
+                dev_warn(fg->dev,
+                    "P452 H0.1 VERIFY_IO streak=%u active=0\n",
+                    fg->a52h0_verify_io_streak);
+                if(fg->a52h0_verify_io_streak>=3)
+                    a52h0_off(fg,"VERIFY_IO_3",true);
+            } else {
+                dev_info(fg->dev,
+                    "P452 H0.1 VERIFY_IO recovered rc=%d manual_rearm=1\n",
+                    check_rc);
+                fg->a52h0_verify_io_streak=0;
+            }
+        }
         goto done;
     }
     if(fg->a52g_inhibit_latched) {
@@ -184,6 +224,17 @@ static void a52h0_tick(struct a52d_fg *fg)
         goto done;
     }
     rc=a52h0_verify(fg,!fg->a52h0_active,&vb,&mv,&st2,&tbat,&tchg);
+    if(rc==-EAGAIN) {
+        fg->a52h0_verify_io_streak++;
+        dev_warn(fg->dev,
+            "P452 H0.1 VERIFY_IO streak=%u active=%d\n",
+            fg->a52h0_verify_io_streak,fg->a52h0_active);
+        a52h0_off(fg,"VERIFY_IO",
+                  fg->a52h0_verify_io_streak>=3);
+        goto done;
+    }
+    /* Consecutive error counter resets on any valid I2C register set. */
+    fg->a52h0_verify_io_streak=0;
     if(rc) {
         if(rc==-ETIME) {
             a52h0_off(fg,"WDT_EXPIRED",true);
@@ -428,7 +479,8 @@ def patch(s):
     struct power_supply *a52h0_usb;
     struct wakeup_source *a52h0_ws;
     bool a52h0_wake_held;
-    unsigned long a52h0_started, a52h0_last_kick;""","fields")
+    unsigned long a52h0_started, a52h0_last_kick;
+    unsigned int a52h0_verify_io_streak;""","fields")
     s=once(s,"static void a52g_poll(struct work_struct *work)",
            DECL+"\nstatic void a52g_poll(struct work_struct *work)","controller code")
     s=once(s,"(void)a52g_sample(fg,false);",
@@ -554,6 +606,9 @@ static enum power_supply_property a52d_props[] = {""","forward functions for FG 
     return s
 def check(root):
     s=(root/SRC).read_text()
+    if H01_TAG not in s: raise RuntimeError('H0.1 marker missing')
+    if 'i2c_smbus_write_byte_data(fg->a52g_chg,A52H0_VBUSCNTL' in s:
+        raise RuntimeError('H0.1 VBUSCNTL write prohibited')
     for key in (TAG,"P452 H0 OFF reason=","P452 H0 ON manual=1",
                 "P452 H0 KICK wdt=90s","dev_attr_h0_kill","dev_attr_a52_h0_enable",
                 "POWER_SUPPLY_PROP_ONLINE",
@@ -578,7 +633,10 @@ def check(root):
     h0=s[start:s.index("static void a52g_poll",start)]
     if "i2c_smbus_write_word_data(" in h0:
         raise RuntimeError("P452 H0 FG/OTP writes prohibited")
-    for key in ("input>0x10","P452 H0 STATE from=",
+    for key in ("input>A52H01_MAX_BOOTLOADER_VBUSCNTL",
+                "P452 H0.1 VERIFY_FAIL rc=","P452 H0.1 VERIFY_IO streak=",
+                "A52_PHASE452_H01_VBUS44_VERIFY_IO_V1",
+                "P452 H0 STATE from=",
                 "P452 H0 ENABLE cur=500","a52h0_ntc_since+10*HZ",
                 "P452 H0 RECHARGE vbat=","a52_h0_enable",
                 "A52H0_WDTCNTL,0x06","A52H0_WDTCNTL,BIT(0)",
