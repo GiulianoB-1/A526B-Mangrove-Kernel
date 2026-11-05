@@ -7,7 +7,9 @@
  * No speaker, codec, ION, calibration, voice, or userspace ABI here.
  * Source wire contract: pinned TG apr.c, apr.h and q6core.c @ 6bf351bd.
  */
+#include <linux/atomic.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
@@ -19,12 +21,20 @@
 #include <linux/workqueue.h>
 
 #define P472_APR_BASIC_RSP_RESULT     0x000110e8
+#define P472_AVCS_CMD_ADSP_EVENT_GET_STATE 0x0001290c
+#define P472_AVCS_CMDRSP_ADSP_EVENT_GET_STATE 0x0001290d
 #define P472_AVCS_CMD_GET_FWK_VERSION 0x0001292c
 #define P472_AVCS_CMDRSP_GET_FWK_VERSION 0x0001292d
 #define P472_APR_DOMAIN_APPS          5
 #define P472_APR_DOMAIN_ADSP          4
 #define P472_APR_SVC_CORE             3
 #define P472_REQ_TIMEOUT_MS          3000
+#define P472_STATE_TIMEOUT_MS         100
+#define P472_READY_POLL_INTERVAL_MS    50
+#define P472_READY_INITIAL_DELAY_MS   100
+#define P472_READY_DEADLINE_MS      10000
+#define P472_RX_RAW_MAX_PACKETS        32
+#define P472_RX_RAW_MAX_BYTES         512
 #define P472_MAX_SERVICES             64
 
 struct p472_apr_hdr {
@@ -58,8 +68,13 @@ struct p472_state {
 	struct work_struct query_work;
 	struct rpmsg_device *rpdev;
 	struct completion reply;
+	struct completion state_reply;
+	atomic_t rx_seen;
 	int reply_rc;
-	bool completed;
+	int state_rc;
+	u32 adsp_state;
+	bool state_pending;
+	bool fwk_pending;
 	bool removing;
 };
 
@@ -113,16 +128,37 @@ out:
 	return rc;
 }
 
+/*
+ * Dump the first 32 packets, including malformed/unexpected APR traffic,
+ * before the APR filters. Bound each dump to the 512-byte DT intent size.
+ */
 static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 			     int len, void *priv, u32 src)
 {
 	struct p472_state *s = dev_get_drvdata(&rpdev->dev);
 	const struct p472_apr_hdr *h = data;
 	const struct p472_fw_ver *v;
+	const __le32 *words;
 	u32 opcode, status, nr;
 	size_t expected;
+	int seen;
 
-	if (!s || !data || len < sizeof(*h))
+	if (!s)
+		return -ENODEV;
+	seen = atomic_inc_return(&s->rx_seen);
+	if (seen <= P472_RX_RAW_MAX_PACKETS) {
+		int nbytes = data && len > 0 ?
+			min_t(int, len, P472_RX_RAW_MAX_BYTES) : 0;
+
+		dev_info(&rpdev->dev,
+			 "P472 A0b APR_RX_RAW seq=%d src=%u len=%d dump=%d\n",
+			 seen, src, len, nbytes);
+		if (nbytes)
+			print_hex_dump(KERN_INFO, "P472 A0b APR_RX_RAW ",
+				       DUMP_PREFIX_OFFSET, 16, 1,
+				       data, nbytes, false);
+	}
+	if (!data || len < sizeof(*h))
 		return -EINVAL;
 	if (le16_to_cpu(h->pkt_size) != len ||
 	    h->src_domain != P472_APR_DOMAIN_ADSP ||
@@ -130,31 +166,68 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	    h->dest_domain != P472_APR_DOMAIN_APPS ||
 	    h->dest_svc != P472_APR_SVC_CORE)
 		return -EPROTO;
-	if (s->removing || s->completed)
+	if (READ_ONCE(s->removing))
 		return 0;
 
 	opcode = le32_to_cpu(h->opcode);
 	if (opcode == P472_APR_BASIC_RSP_RESULT) {
-		const __le32 *words;
 		if (len != sizeof(*h) + 2 * sizeof(__le32))
 			return -EPROTO;
 		words = (const __le32 *)(h + 1);
-		if (le32_to_cpu(words[0]) != P472_AVCS_CMD_GET_FWK_VERSION)
-			return 0;
 		status = le32_to_cpu(words[1]);
-		if (!status)
-			return 0; /* ACK, not a firmware-version response. */
-		s->reply_rc = -EREMOTEIO;
-		dev_err(&rpdev->dev, "P472 A0 Q6CORE basic_nack status=%u rc=%d\n",
-			status, s->reply_rc);
-		goto complete;
+		switch (le32_to_cpu(words[0])) {
+		case P472_AVCS_CMD_ADSP_EVENT_GET_STATE:
+			/* ACK status 0 is not the actual GET_STATE response. */
+			if (!READ_ONCE(s->state_pending) || !status)
+				return 0;
+			s->state_rc = -EREMOTEIO;
+			dev_err(&rpdev->dev,
+				"P472 A0b GET_STATE basic_nack status=%u rc=%d\n",
+				status, s->state_rc);
+			WRITE_ONCE(s->state_pending, false);
+			complete(&s->state_reply);
+			return 0;
+		case P472_AVCS_CMD_GET_FWK_VERSION:
+			if (!READ_ONCE(s->fwk_pending) || !status)
+				return 0;
+			s->reply_rc = -EREMOTEIO;
+			dev_err(&rpdev->dev,
+				"P472 A0 Q6CORE basic_nack status=%u rc=%d\n",
+				status, s->reply_rc);
+			WRITE_ONCE(s->fwk_pending, false);
+			complete(&s->reply);
+			return 0;
+		default:
+			return 0;
+		}
 	}
 
-	if (opcode != P472_AVCS_CMDRSP_GET_FWK_VERSION)
+	if (opcode == P472_AVCS_CMDRSP_ADSP_EVENT_GET_STATE) {
+		if (!READ_ONCE(s->state_pending))
+			return 0;
+		if (len < sizeof(*h) + sizeof(__le32)) {
+			s->state_rc = -EPROTO;
+			dev_err(&rpdev->dev,
+				"P472 A0b GET_STATE short_reply len=%d rc=%d\n",
+				len, s->state_rc);
+		} else {
+			words = (const __le32 *)(h + 1);
+			s->adsp_state = le32_to_cpu(words[0]);
+			s->state_rc = 0;
+			dev_info(&rpdev->dev,
+				 "P472 A0b GET_STATE response state=%u rc=0\n",
+				 s->adsp_state);
+		}
+		WRITE_ONCE(s->state_pending, false);
+		complete(&s->state_reply);
+		return 0;
+	}
+	if (opcode != P472_AVCS_CMDRSP_GET_FWK_VERSION ||
+	    !READ_ONCE(s->fwk_pending))
 		return 0;
 	if (len < sizeof(*h) + sizeof(*v)) {
 		s->reply_rc = -EPROTO;
-		goto complete;
+		goto fwk_complete;
 	}
 	v = (const struct p472_fw_ver *)(h + 1);
 	nr = le32_to_cpu(v->count);
@@ -165,53 +238,116 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 		dev_err(&rpdev->dev,
 			"P472 A0 Q6CORE bad_version_payload services=%u size=%d rc=%d\n",
 			nr, len, s->reply_rc);
-		goto complete;
+		goto fwk_complete;
 	}
 	s->reply_rc = 0;
 	dev_info(&rpdev->dev,
 		 "P472 A0 Q6CORE ver=%u.%u.%u.%u services=%u rc=0\n",
 		 le32_to_cpu(v->major), le32_to_cpu(v->minor),
 		 le32_to_cpu(v->branch), le32_to_cpu(v->subbranch), nr);
-complete:
-	s->completed = true;
+fwk_complete:
+	WRITE_ONCE(s->fwk_pending, false);
 	complete(&s->reply);
 	return 0;
 }
 
-static void p472_query_work(struct work_struct *work)
+static int p472_send_command(struct p472_state *s, u32 opcode)
 {
-	struct p472_state *s = container_of(work, struct p472_state, query_work);
 	struct rpmsg_device *rpdev = s->rpdev;
 	struct p472_apr_hdr h = { };
-	unsigned long waited;
 	int rc;
 
-	/* TG APR_HDR_FIELD(SEQ_CMD, 5 dwords, 0) and TG CORE service.
-	 * Real request on the live ADSP GLINK endpoint; no synthetic reply.
-	 */
+	/* Same TG wire header, zero token, and CORE src/dest as A0. */
 	h.hdr_field = cpu_to_le16((2 << 8) | (5 << 4));
 	h.pkt_size = cpu_to_le16(sizeof(h));
 	h.src_svc = P472_APR_SVC_CORE;
 	h.src_domain = P472_APR_DOMAIN_APPS;
 	h.dest_svc = P472_APR_SVC_CORE;
 	h.dest_domain = P472_APR_DOMAIN_ADSP;
-	h.opcode = cpu_to_le32(P472_AVCS_CMD_GET_FWK_VERSION);
+	h.opcode = cpu_to_le32(opcode);
 	rc = rpmsg_send(rpdev->ept, &h, sizeof(h));
+	dev_info(&rpdev->dev, "P472 A0b APR_SEND opcode=0x%08x rc=%d\n",
+		 opcode, rc);
+	return rc;
+}
+
+static void p472_query_work(struct work_struct *work)
+{
+	struct p472_state *s = container_of(work, struct p472_state, query_work);
+	struct rpmsg_device *rpdev = s->rpdev;
+	unsigned long deadline, waited, timeout;
+	unsigned int attempts = 0;
+	int rc;
+
+	/* TG waits 100 ms before querying AVS readiness. */
+	if (READ_ONCE(s->removing))
+		return;
+	msleep(P472_READY_INITIAL_DELAY_MS);
+	deadline = jiffies + msecs_to_jiffies(P472_READY_DEADLINE_MS);
+	while (time_before(jiffies, deadline)) {
+		if (READ_ONCE(s->removing))
+			return;
+		attempts++;
+		reinit_completion(&s->state_reply);
+		s->state_rc = -ETIMEDOUT;
+		s->adsp_state = 0;
+		WRITE_ONCE(s->state_pending, true);
+		rc = p472_send_command(s, P472_AVCS_CMD_ADSP_EVENT_GET_STATE);
+		if (rc) {
+			WRITE_ONCE(s->state_pending, false);
+			dev_err(&rpdev->dev,
+				"P472 A0b GET_STATE attempt=%u send_rc=%d\n",
+				attempts, rc);
+		} else {
+			timeout = min_t(unsigned long,
+					msecs_to_jiffies(P472_STATE_TIMEOUT_MS),
+					deadline - jiffies);
+			waited = wait_for_completion_timeout(&s->state_reply,
+							    timeout);
+			WRITE_ONCE(s->state_pending, false);
+			if (READ_ONCE(s->removing))
+				return;
+			if (waited && !s->state_rc && s->adsp_state) {
+				dev_info(&rpdev->dev,
+					 "P472 A0b ADSP_READY state=%u attempts=%u rc=0\n",
+					 s->adsp_state, attempts);
+				goto get_fwk_version;
+			}
+			dev_info(&rpdev->dev,
+				 "P472 A0b GET_STATE attempt=%u reply=%u state=%u rc=%d\n",
+				 attempts, !!waited, s->adsp_state,
+				 waited ? s->state_rc : -ETIMEDOUT);
+		}
+		if (time_after_eq(jiffies, deadline))
+			break;
+		msleep(P472_READY_POLL_INTERVAL_MS);
+	}
+	if (!READ_ONCE(s->removing))
+		dev_err(&rpdev->dev,
+			"P472 A0b ADSP_READY_TIMEOUT attempts=%u rc=%d\n",
+			attempts, -ETIMEDOUT);
+	return;
+
+get_fwk_version:
+	if (READ_ONCE(s->removing))
+		return;
+	reinit_completion(&s->reply);
+	s->reply_rc = -ETIMEDOUT;
+	WRITE_ONCE(s->fwk_pending, true);
+	rc = p472_send_command(s, P472_AVCS_CMD_GET_FWK_VERSION);
 	if (rc) {
-		dev_err(&rpdev->dev, "P472 A0 Q6CORE send rc=%d\n", rc);
+		WRITE_ONCE(s->fwk_pending, false);
 		return;
 	}
 	waited = wait_for_completion_timeout(&s->reply,
-					msecs_to_jiffies(P472_REQ_TIMEOUT_MS));
+					    msecs_to_jiffies(P472_REQ_TIMEOUT_MS));
+	WRITE_ONCE(s->fwk_pending, false);
+	if (READ_ONCE(s->removing))
+		return;
 	rc = waited ? s->reply_rc : -ETIMEDOUT;
-	if (rc) {
-		if (s->removing)
-			return;
+	if (rc)
 		dev_err(&rpdev->dev, "P472 A0 APR_TIMEOUT rc=%d reply=%d\n",
 			rc, !!waited);
-		return;
-	}
-	return;
 }
 
 static int p472_apr_probe(struct rpmsg_device *rpdev)
@@ -248,7 +384,10 @@ static int p472_apr_probe(struct rpmsg_device *rpdev)
 	if (!s)
 		return -ENOMEM;
 	init_completion(&s->reply);
+	init_completion(&s->state_reply);
+	atomic_set(&s->rx_seen, 0);
 	s->reply_rc = -ETIMEDOUT;
+	s->state_rc = -ETIMEDOUT;
 	dev_set_drvdata(&rpdev->dev, s);
 	dev_info(&rpdev->dev,
 		 "P472 A0 APR_TAL dest=adsp source=remote-pid:%u channel=%s rc=0\n",
@@ -267,9 +406,10 @@ static void p472_apr_remove(struct rpmsg_device *rpdev)
 	struct p472_state *s = dev_get_drvdata(&rpdev->dev);
 
 	if (s) {
-		s->removing = true;
-		complete_all(&s->reply);
+		WRITE_ONCE(s->removing, true);
 		cancel_work_sync(&s->query_work);
+		complete_all(&s->state_reply);
+		complete_all(&s->reply);
 		dev_set_drvdata(&rpdev->dev, NULL);
 	}
 	dev_info(&rpdev->dev, "P472 A0 APR_TAL channel=down rc=0\n");
@@ -291,4 +431,4 @@ static struct rpmsg_driver p472_driver = {
 module_rpmsg_driver(p472_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("P472 A0 native diagnostic APRv2 Q6CORE version roundtrip (no audio card)");
+MODULE_DESCRIPTION("P472 A0b APRv2 ADSP readiness + Q6CORE version diagnostics (no audio card)");
