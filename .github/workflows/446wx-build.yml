@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 A1 gate0 TG APR 32-byte response ABI / P471 BT B3 retained (NO ARM)
+run-name: P472 A1 gate0 APR32 + P452 H0.1 VBUS44 / P471 BT B3 retained (NO ARM)
 on:
   push:
     branches:
@@ -37,6 +37,7 @@ on:
       - agent/p473-b2-se1-pinctrl-active-swctrl-no-arm
       - agent/p473-b3-se1-baud-a0-combined-no-arm
       - agent/p472-a1-audio-hdr32-gated-no-arm
+      - agent/p472-a1-gate0-h01-combined-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -721,6 +722,8 @@ jobs:
             verify_g_marker 'P452 H0 ENABLE cur=500'
             verify_g_marker 'P452 H0 KICK wdt=90s'
             verify_g_marker 'P452 H0 STOP reason='
+            verify_g_marker 'P452 H0.1 VERIFY_FAIL rc='
+            verify_g_marker 'P452 H0.1 VERIFY_IO streak='
             verify_g_marker 'P452 SCM PROBED native_5_10=1 dload_default='
             # Kbuild: ufs-qcom-ice.o needs BOTH the Qualcomm UFS host
             # and inline crypto. The source safety audit runs in all cases.
