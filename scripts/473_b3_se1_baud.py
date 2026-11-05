@@ -135,12 +135,12 @@ static void p473_b3_log_clk_table(struct qcom_geni_serial_port *port,
 
 def check(root):
     s = (root / UART).read_text()
-    for marker in (MARK, "P473 B3 CLK_TBL n=%d", "P473 B3 BAUD baud=%u",
+    for marker in (MARK, "P473 B3 BAUD baud=%u",
                    "P473 B3 BAUD set opp_rc=%d actual=%lu",
                    "P473 B3 RFR before=%x after=%x"):
         if s.count(marker) != 1:
             raise RuntimeError("P473 B3 marker drift " + marker)
-    if "geni_se_clk_freq_match(&port->se, desired" not in s:
+    if s.count("P473 B3 CLK_TBL n=%d") != 2:\n        raise RuntimeError("P473 B3 clock table success/error marker drift")\n    if "geni_se_clk_freq_match(&port->se, desired" not in s:
         raise RuntimeError("P473 B3 clock match absent")
     return {"phase":"P473-B3", "se1_only":True, "core_modified":False,
             "baud_clock":"geni_se_clk_freq_match", "opp_rc_logged":True,
