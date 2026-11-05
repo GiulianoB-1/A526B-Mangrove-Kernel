@@ -714,7 +714,6 @@ jobs:
               echo "::error title=P452 config::A52_447G_CHG_GUARD is not built-in"
               exit 1
             }
-            verify_g_marker 'P472 A1 APR_HDR_INVALID'
             verify_g_marker 'P452 H0 STATE from='
             verify_g_marker 'P451 ADSP PROBE manual_start=1 auto_boot=0'
             verify_g_marker 'P448 AOSS probe rc=0'
@@ -1859,6 +1858,14 @@ jobs:
           python3 scripts/473_b2_se1_pinctrl.py --root "$ROOT" --check-only
           python3 scripts/473_b3_se1_baud.py --root "$ROOT" --check-only
           python3 scripts/472_a0_native.py --root "$ROOT" --check-only
+          python3 scripts/472_a1_hdr32_gate.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq"
+          for marker in 'P472 A1 APR_HDR_INVALID' 'P472 A1 APR_HDR hdr_field='; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P472 A1 GATE0 native Image marker missing::$marker"
+              exit 1
+            }
+          done
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
