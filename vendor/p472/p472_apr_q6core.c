@@ -36,6 +36,7 @@
 #define P472_RX_RAW_MAX_PACKETS        32
 #define P472_RX_RAW_MAX_BYTES         512
 #define P472_MAX_SERVICES             64
+/* P472_A1_APR_VARIABLE_HEADER_V1: TG APR hdr_len = bits[7:4] * 4. */
 
 struct p472_apr_hdr {
 	__le16 hdr_field;
@@ -140,7 +141,9 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	const struct p472_fw_ver *v;
 	const __le32 *words;
 	u32 opcode, status, nr;
-	size_t expected;
+	size_t expected, hdr_size;
+	const u8 *payload;
+	u16 hdr_field;
 	int seen;
 
 	if (!s)
@@ -166,14 +169,32 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	    h->dest_domain != P472_APR_DOMAIN_APPS ||
 	    h->dest_svc != P472_APR_SVC_CORE)
 		return -EPROTO;
+	/*
+	 * TG apr_cb_func() decodes hdr_len from hdr_field[7:4] in dwords.
+	 * ADSP uses 8 dwords (32 bytes) on this device, not the outgoing
+	 * 5-dword (20-byte) header. Never parse payload at (h + 1).
+	 */
+	hdr_field = le16_to_cpu(h->hdr_field);
+	hdr_size = ((hdr_field >> 4) & 0x0f) * 4;
+	if (hdr_size < sizeof(*h) || hdr_size > len) {
+		dev_err_ratelimited(&rpdev->dev,
+			"P472 A1 APR_HDR_INVALID hdr_field=0x%04x hdr_size=%zu len=%d\\n",
+			hdr_field, hdr_size, len);
+		return -EPROTO;
+	}
+	payload = (const u8 *)data + hdr_size;
 	if (READ_ONCE(s->removing))
 		return 0;
 
+	if (atomic_read(&s->rx_seen) <= P472_RX_RAW_MAX_PACKETS)
+		dev_info(&rpdev->dev,
+			 "P472 A1 APR_HDR hdr_field=0x%04x hdr_len=%zu pkt=%d opcode=0x%08x\\n",
+			 hdr_field, hdr_size, len, le32_to_cpu(h->opcode));
 	opcode = le32_to_cpu(h->opcode);
 	if (opcode == P472_APR_BASIC_RSP_RESULT) {
-		if (len != sizeof(*h) + 2 * sizeof(__le32))
+		if (len != hdr_size + 2 * sizeof(__le32))
 			return -EPROTO;
-		words = (const __le32 *)(h + 1);
+		words = (const __le32 *)payload;
 		status = le32_to_cpu(words[1]);
 		switch (le32_to_cpu(words[0])) {
 		case P472_AVCS_CMD_ADSP_EVENT_GET_STATE:
@@ -205,13 +226,13 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	if (opcode == P472_AVCS_CMDRSP_ADSP_EVENT_GET_STATE) {
 		if (!READ_ONCE(s->state_pending))
 			return 0;
-		if (len < sizeof(*h) + sizeof(__le32)) {
+		if (len < hdr_size + sizeof(__le32)) {
 			s->state_rc = -EPROTO;
 			dev_err(&rpdev->dev,
 				"P472 A0b GET_STATE short_reply len=%d rc=%d\n",
 				len, s->state_rc);
 		} else {
-			words = (const __le32 *)(h + 1);
+			words = (const __le32 *)payload;
 			s->adsp_state = le32_to_cpu(words[0]);
 			s->state_rc = 0;
 			dev_info(&rpdev->dev,
@@ -225,13 +246,13 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	if (opcode != P472_AVCS_CMDRSP_GET_FWK_VERSION ||
 	    !READ_ONCE(s->fwk_pending))
 		return 0;
-	if (len < sizeof(*h) + sizeof(*v)) {
+	if (len < hdr_size + sizeof(*v)) {
 		s->reply_rc = -EPROTO;
 		goto fwk_complete;
 	}
-	v = (const struct p472_fw_ver *)(h + 1);
+	v = (const struct p472_fw_ver *)payload;
 	nr = le32_to_cpu(v->count);
-	expected = sizeof(*h) + sizeof(*v) +
+	expected = hdr_size + sizeof(*v) +
 		   (size_t)nr * sizeof(struct p472_service_version);
 	if (nr > P472_MAX_SERVICES || expected > len) {
 		s->reply_rc = -EPROTO;
