@@ -1999,11 +1999,11 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P473-B1-BTPOWER-SE1-NO-ARM.boot.img \
+            --output phase447b-variants/MANGROVE-P472-A1-G0-H01-B3-NO-ARM.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P473-B1-BTPOWER-SE1-NO-ARM.boot.img \
+            --candidate phase447b-variants/MANGROVE-P472-A1-G0-H01-B3-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
@@ -2012,7 +2012,7 @@ jobs:
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P473-B1-BTPOWER-SE1-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P472-A1-G0-H01-B3-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
@@ -2033,9 +2033,9 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P473-B1-BTPOWER-SE1-NO-ARM-${{ github.run_number }}
+          name: MANGROVE-P472-A1-G0-H01-B3-NO-ARM-${{ github.run_number }}
           path: |
-            phase447b-variants/MANGROVE-P473-B1-BTPOWER-SE1-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P472-A1-G0-H01-B3-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
@@ -2043,6 +2043,11 @@ jobs:
             phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
             phase447-inventory/P473-B0-NATIVE-SOURCE.json
             phase447-inventory/P473-B1-SOURCE.json
+            phase447-inventory/P473-B2-SOURCE.json
+            phase447-inventory/P473-B3-SOURCE.json
+            phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-APR-HDR-GATE0.json
+            phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
@@ -2086,6 +2091,11 @@ jobs:
             phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
             phase447-inventory/P473-B0-NATIVE-SOURCE.json
             phase447-inventory/P473-B1-SOURCE.json
+            phase447-inventory/P473-B2-SOURCE.json
+            phase447-inventory/P473-B3-SOURCE.json
+            phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-APR-HDR-GATE0.json
+            phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
