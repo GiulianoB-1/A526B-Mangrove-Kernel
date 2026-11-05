@@ -178,7 +178,7 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	hdr_size = ((hdr_field >> 4) & 0x0f) * 4;
 	if (hdr_size < sizeof(*h) || hdr_size > len) {
 		dev_err_ratelimited(&rpdev->dev,
-			"P472 A1 APR_HDR_INVALID hdr_field=0x%04x hdr_size=%zu len=%d\\n",
+			"P472 A1 APR_HDR_INVALID hdr_field=0x%04x hdr_size=%zu len=%d\n",
 			hdr_field, hdr_size, len);
 		return -EPROTO;
 	}
@@ -188,7 +188,7 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 
 	if (atomic_read(&s->rx_seen) <= P472_RX_RAW_MAX_PACKETS)
 		dev_info(&rpdev->dev,
-			 "P472 A1 APR_HDR hdr_field=0x%04x hdr_len=%zu pkt=%d opcode=0x%08x\\n",
+			 "P472 A1 APR_HDR hdr_field=0x%04x hdr_len=%zu pkt=%d opcode=0x%08x\n",
 			 hdr_field, hdr_size, len, le32_to_cpu(h->opcode));
 	opcode = le32_to_cpu(h->opcode);
 	if (opcode == P472_APR_BASIC_RSP_RESULT) {
