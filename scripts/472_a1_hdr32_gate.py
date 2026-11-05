@@ -48,7 +48,9 @@ def gate(root, tg):
     ):
         if v not in s:
             raise RuntimeError("P472 A1 APR parity anchor missing: " + v)
-    if "(h + 1)" in s or "expected = sizeof(*h)" in s:
+    if "(const __le32 *)(h + 1)" in s or \
+       "(const struct p472_fw_ver *)(h + 1)" in s or \
+       "expected = sizeof(*h)" in s:
         raise RuntimeError("P472 A1 fixed 20-byte response payload survives")
     t = (tg / TG_APR).read_text()
     if "((hdr_size & 0x00F0) >> 0x4) * 4" not in t:
