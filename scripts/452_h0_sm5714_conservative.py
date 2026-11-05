@@ -10,8 +10,9 @@ is switched OFF by the mandatory existing P449 guard before this controller.
 TG sm5714_charger.c 6bf351bd: CHGCNTL2 0x18 <- 0x20 (500mA),
 WDTCNTL 0x22 timer 2 (90s), enable bit0, kick bit3; CNTL1 bit3 ENQ4FET.
 H0 holds a wakeup source throughout charging and releases it on every stop.
-Prohibit FACTORY1/VBUSCNTL/CNTL2 writes. If input>500, DECLINE the
-charge attempt (TG >500 ramp is impossible under this allowlist).
+Prohibit FACTORY1/VBUSCNTL/CNTL2 writes. Accept bootloader-set
+VBUSCNTL through 0x44 read-only; H0 itself still writes only a 500 mA
+fast-charge setting. Never attempt a current ramp or auto-arm.
 """
 import argparse
 from pathlib import Path
