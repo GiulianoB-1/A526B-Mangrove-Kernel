@@ -60,6 +60,7 @@ struct p472_state {
 	struct completion reply;
 	int reply_rc;
 	bool completed;
+	bool removing;
 };
 
 static struct device_node *p472_find_intents_node(struct rpmsg_device *rpdev)
@@ -129,7 +130,7 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 	    h->dest_domain != P472_APR_DOMAIN_APPS ||
 	    h->dest_svc != P472_APR_SVC_CORE)
 		return -EPROTO;
-	if (s->completed)
+	if (s->removing || s->completed)
 		return 0;
 
 	opcode = le32_to_cpu(h->opcode);
@@ -204,6 +205,8 @@ static void p472_query_work(struct work_struct *work)
 					msecs_to_jiffies(P472_REQ_TIMEOUT_MS));
 	rc = waited ? s->reply_rc : -ETIMEDOUT;
 	if (rc) {
+		if (s->removing)
+			return;
 		dev_err(&rpdev->dev, "P472 A0 APR_TIMEOUT rc=%d reply=%d\n",
 			rc, !!waited);
 		return;
@@ -264,6 +267,7 @@ static void p472_apr_remove(struct rpmsg_device *rpdev)
 	struct p472_state *s = dev_get_drvdata(&rpdev->dev);
 
 	if (s) {
+		s->removing = true;
 		complete_all(&s->reply);
 		cancel_work_sync(&s->query_work);
 		dev_set_drvdata(&rpdev->dev, NULL);
