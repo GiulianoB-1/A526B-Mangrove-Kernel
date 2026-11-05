@@ -309,10 +309,6 @@ jobs:
           bash -n scripts/452_apply_phase_chain.sh
           python3 -m py_compile scripts/458_pstore_ecc48_dtb.py scripts/458_dsp_disabled_scm_dtb.py scripts/458_dsp_runtime_scm.py scripts/457_source_safety_gates.py scripts/452_h0_sm5714_conservative.py scripts/452_h01_safety_gate.py scripts/460b_apps_smmu_tg.py scripts/461_final_boot_ecc48_gate.py scripts/461_stage_adsp_fastrpc_dtb.py scripts/462_wdt_pm_safety.py scripts/462_pm_probe_bypass_audit.py scripts/462_live_ramoops_authoritative.py scripts/461_enable_sensors_fastrpc.py scripts/461_sensor_pstore_probe.py scripts/461_pack_adsp_sensor_boot.py scripts/463_guard_suspend_safe.py scripts/465_fastrpc_mmap_guard.py scripts/466_fastrpc_dma_wait.py scripts/467_mss_pas_source.py scripts/467_mss_rmtfs_source.py scripts/467_mss_boot_dtb.py scripts/468_mss_ril_compat_source.py scripts/468_mss_ril_compat_dtb.py scripts/468b_modem_ssr_smem.py scripts/469_pstore_node_match.py scripts/469_mss_fatal_recovery.py scripts/469b_mss_offline_cleanup.py scripts/469b_pstore_driver.py
           bash scripts/452_apply_phase_chain.sh
-          if [ "${{ matrix.variant.id }}" = G ]; then
-            python3 scripts/452_h01_safety_gate.py --root "$ROOT" \
-              --report phase447-inventory/P452-H01-SOURCE-SAFETY.json
-          fi
           # Fail closed if the P457 SMMU patch generator has changed.
           git fetch --depth=1 origin a6ad805fb70592322d736bcec5e41c98d5e1cc15
           git show FETCH_HEAD:scripts/452_scm_ufs_ice_audit.py | cmp - scripts/452_scm_ufs_ice_audit.py
@@ -335,6 +331,8 @@ jobs:
             python3 scripts/463_guard_suspend_safe.py --root "$ROOT" \
               --report phase447-inventory/P464-P463-GUARD-PM-SAFETY.json
             python3 scripts/463_guard_suspend_safe.py --root "$ROOT" --check-only
+            python3 scripts/452_h01_safety_gate.py --root "$ROOT" \
+              --report phase447-inventory/P452-H01-SOURCE-SAFETY.json
             echo 'P464 same G source: P463 guard PM notifier/freezable worker active before P461 FastRPC generation' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
