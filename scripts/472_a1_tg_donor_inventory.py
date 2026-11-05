@@ -34,7 +34,7 @@ RUNTIME_ABI = {
     "mixer_controls": "batch 9 exact-name comparison required",
 }
 DISABLED = ["tas256x_speaker", "wsa", "wcd937x", "fsa4480",
-            "calibration_writes", "no_automatic_arm"]
+            "calibration_writes", "automatic_charger_arm"]
 
 def audit(tg):
     root = tg / ROOT
