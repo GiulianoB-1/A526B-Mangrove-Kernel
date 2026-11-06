@@ -11,6 +11,13 @@
 #include <linux/rpmsg.h>
 #include <ipc/apr_tal.h>
 #include <linux/of_device.h>
+#include <linux/of.h>
+#include <linux/slab.h>
+#include <linux/atomic.h>
+#include <linux/completion.h>
+#include <linux/workqueue.h>
+#include <linux/srcu.h>
+#include <ipc/apr.h>
 
 enum apr_channel_state {
 	APR_CH_DISCONNECTED,
@@ -18,6 +25,38 @@ enum apr_channel_state {
 };
 
 #define APR_MAXIMUM_NUM_OF_RETRIES 2
+/* P472_A1_TG_TAL_REMOTE_PID_A0B_DEFERRED_RX_V1 */
+#define P472_TG_APR_GET_STATE 0x0001290c
+#define P472_TG_APR_GET_STATE_RSP 0x0001290d
+#define P472_TG_APR_RX_MAX 8192
+#define P472_TG_APR_RX_BOUND 32
+#define P472_TG_APR_WAIT_MS 100
+#define P472_TG_APR_POLL_MS 50
+#define P472_TG_APR_DEADLINE_MS 10000
+
+extern void p472_tg_apr_a0b_ready(void);
+extern void p472_tg_apr_a0b_down(void);
+
+struct p472_tg_ctx {
+	struct rpmsg_device *rpdev;
+	struct apr_svc_ch_dev *channel;
+	struct work_struct ready_work;
+	struct workqueue_struct *rx_wq;
+	struct completion state_completion;
+	atomic_t pending;
+	atomic_t queued;
+	atomic_t rx_seen;
+	bool removing;
+	u32 adsp_state;
+};
+struct p472_tg_rx_packet {
+	struct work_struct work;
+	struct p472_tg_ctx *ctx;
+	int len;
+	u8 data[];
+};
+static DEFINE_SRCU(p472_tg_rx_srcu);
+
 
 static struct apr_svc_ch_dev
 	apr_svc_ch[APR_DL_MAX][APR_DEST_MAX][APR_CLIENT_MAX];
@@ -176,93 +215,219 @@ int apr_tal_close(struct apr_svc_ch_dev *apr_ch)
 	apr_ch->func = NULL;
 	apr_ch->priv = NULL;
 	mutex_unlock(&apr_ch->m_lock);
+	/* Workqueue callbacks run outside RX/IRQ context.  SRCU drains
+	 * callbacks that observed the previous registered service.
+	 */
+	synchronize_srcu(&p472_tg_rx_srcu);
 
 exit:
 	return rc;
 }
 EXPORT_SYMBOL(apr_tal_close);
 
+
+static void p472_tg_apr_rx_work(struct work_struct *work)
+{
+	struct p472_tg_rx_packet *packet =
+		container_of(work, struct p472_tg_rx_packet, work);
+	struct apr_svc_ch_dev *ch = packet->ctx->channel;
+	apr_svc_cb_fn func;
+	void *priv;
+	int idx;
+
+	if (!READ_ONCE(packet->ctx->removing)) {
+		idx = srcu_read_lock(&p472_tg_rx_srcu);
+		func = READ_ONCE(ch->func);
+		priv = READ_ONCE(ch->priv);
+		if (func)
+			func(packet->data, packet->len, priv);
+		srcu_read_unlock(&p472_tg_rx_srcu, idx);
+	}
+	atomic_dec(&packet->ctx->queued);
+	kfree(packet);
+}
+
+static void p472_tg_apr_ready_work(struct work_struct *work)
+{
+	struct p472_tg_ctx *ctx = container_of(work, struct p472_tg_ctx,
+					       ready_work);
+	struct apr_hdr cmd = { };
+	unsigned long deadline, waited;
+	int rc, attempts = 0;
+
+	/* A0b matches the working ADSP GET_STATE handshake. */
+	msleep(100);
+	deadline = jiffies + msecs_to_jiffies(P472_TG_APR_DEADLINE_MS);
+	cmd.hdr_field = (2 << 8) | (5 << 4);
+	cmd.pkt_size = sizeof(cmd);
+	cmd.src_svc = APR_SVC_ADSP_CORE;
+	cmd.src_domain = APR_DOMAIN_APPS;
+	cmd.dest_svc = APR_SVC_ADSP_CORE;
+	cmd.dest_domain = APR_DOMAIN_ADSP;
+	cmd.opcode = P472_TG_APR_GET_STATE;
+	while (time_before(jiffies, deadline)) {
+		if (READ_ONCE(ctx->removing))
+			return;
+		attempts++;
+		reinit_completion(&ctx->state_completion);
+		WRITE_ONCE(ctx->adsp_state, 0);
+		atomic_set(&ctx->pending, 1);
+		rc = rpmsg_send(ctx->rpdev->ept, &cmd, sizeof(cmd));
+		dev_info(&ctx->rpdev->dev,
+			 "P472 TG APR_SEND GET_STATE attempt=%d rc=%d\n",
+			 attempts, rc);
+		if (!rc) {
+			waited = wait_for_completion_timeout(&ctx->state_completion,
+				msecs_to_jiffies(P472_TG_APR_WAIT_MS));
+			atomic_set(&ctx->pending, 0);
+			if (READ_ONCE(ctx->removing))
+				return;
+			if (waited && READ_ONCE(ctx->adsp_state)) {
+				dev_info(&ctx->rpdev->dev,
+					"P472 TG APR ADSP_READY state=%u attempts=%d\n",
+					READ_ONCE(ctx->adsp_state), attempts);
+				p472_tg_apr_a0b_ready();
+				return;
+			}
+		} else {
+			atomic_set(&ctx->pending, 0);
+		}
+		if (time_after_eq(jiffies, deadline))
+			break;
+		msleep(P472_TG_APR_POLL_MS);
+	}
+	if (!READ_ONCE(ctx->removing))
+		dev_err(&ctx->rpdev->dev,
+			"P472 TG APR ADSP_READY_TIMEOUT attempts=%d\n", attempts);
+}
+
 static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 				  void *data, int len, void *priv, u32 addr)
 {
-	struct apr_svc_ch_dev *apr_ch = dev_get_drvdata(&rpdev->dev);
-	unsigned long flags;
+	struct p472_tg_ctx *ctx = dev_get_drvdata(&rpdev->dev);
+	struct p472_tg_rx_packet *packet;
+	const struct apr_hdr *hdr = data;
+	int seen;
+	u16 hdr_len;
+	__le32 state;
 
-	if (!apr_ch || !data) {
-		pr_err("%s: Invalid apr_ch or ptr\n", __func__);
-		return -EINVAL;
+	if (!ctx || READ_ONCE(ctx->removing) || !data)
+		return -ENODEV;
+	seen = atomic_inc_return(&ctx->rx_seen);
+	if (seen <= 32) {
+		dev_info(&rpdev->dev,
+			"P472 TG APR_RX_RAW seq=%d len=%d\n", seen, len);
+		if (len > 0)
+			print_hex_dump(KERN_INFO, "P472 TG APR_RX_RAW ",
+				       DUMP_PREFIX_OFFSET, 16, 1, data,
+				       min_t(int, len, 512), false);
 	}
-
-	dev_dbg(&rpdev->dev, "%s: Rx packet received, len:%d\n",
-		__func__, len);
-
-	spin_lock_irqsave(&apr_ch->r_lock, flags);
-	if (apr_ch->func)
-		apr_ch->func((void *)data, len, apr_ch->priv);
-	spin_unlock_irqrestore(&apr_ch->r_lock, flags);
-
+	if (len < sizeof(*hdr) || len > P472_TG_APR_RX_MAX)
+		return -EMSGSIZE;
+	hdr_len = ((hdr->hdr_field >> 4) & 0x0f) * 4;
+	if (hdr_len < sizeof(*hdr) || hdr_len > len ||
+	    hdr->pkt_size != len)
+		return -EPROTO;
+	if (hdr->opcode == P472_TG_APR_GET_STATE_RSP &&
+	    hdr->src_domain == APR_DOMAIN_ADSP &&
+	    hdr->src_svc == APR_SVC_ADSP_CORE &&
+	    atomic_read(&ctx->pending) && len >= hdr_len + 4) {
+		memcpy(&state, (u8 *)data + hdr_len, sizeof(state));
+		WRITE_ONCE(ctx->adsp_state, le32_to_cpu(state));
+		complete(&ctx->state_completion);
+		return 0;
+	}
+	/* Never invoke apr_cb_func or a Q6 client in RPMSG RX context. */
+	if (!ctx->rx_wq || atomic_inc_return(&ctx->queued) >
+	    P472_TG_APR_RX_BOUND) {
+		atomic_dec(&ctx->queued);
+		return -ENOSPC;
+	}
+	packet = kmalloc(sizeof(*packet) + len, GFP_ATOMIC);
+	if (!packet) {
+		atomic_dec(&ctx->queued);
+		return -ENOMEM;
+	}
+	packet->ctx = ctx;
+	packet->len = len;
+	memcpy(packet->data, data, len);
+	INIT_WORK(&packet->work, p472_tg_apr_rx_work);
+	if (!queue_work(ctx->rx_wq, &packet->work)) {
+		atomic_dec(&ctx->queued);
+		kfree(packet);
+		return -EIO;
+	}
 	return 0;
 }
 
 static int apr_tal_rpmsg_probe(struct rpmsg_device *rpdev)
 {
-	struct apr_svc_ch_dev *apr_ch = NULL;
-	int ret = 0;
-	const char* dest;
+	struct p472_tg_ctx *ctx;
+	struct device_node *edge;
+	struct apr_svc_ch_dev *apr_ch;
+	u32 remote_pid;
+	int rc;
 
-	ret = of_property_read_string(rpdev->dev.parent->of_node,
-				   "mbox-names", &dest);
-
-	if(ret < 0){
-		pr_err("%s no parent source pid found\n", __func__);
-		return -EINVAL;
+	if (strcmp(rpdev->id.name, "apr_audio_svc"))
+		return -ENODEV;
+	edge = rpdev->dev.parent ? rpdev->dev.parent->of_node : NULL;
+	if (!edge || of_property_read_u32(edge, "qcom,remote-pid",
+					 &remote_pid) || remote_pid != 2) {
+		dev_err(&rpdev->dev,
+			"P472 TG APR_TAL remote-pid rejected only_adsp=2\n");
+		return -ENODEV;
 	}
-
-	if (!strcmp(rpdev->id.name, "apr_audio_svc")) {
-		dev_info(&rpdev->dev, "%s: Channel[%s] state[Up]\n",
-			 __func__, rpdev->id.name);
-	} else {
-		dev_err(&rpdev->dev, "%s, Invalid Channel [%s]\n",
-			__func__, rpdev->id.name);
-		return -EINVAL;
+	apr_ch = &apr_svc_ch[APR_DL_SMD][APR_DEST_QDSP6][APR_CLIENT_AUDIO];
+	ctx = devm_kzalloc(&rpdev->dev, sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->rpdev = rpdev;
+	ctx->channel = apr_ch;
+	init_completion(&ctx->state_completion);
+	atomic_set(&ctx->pending, 0);
+	atomic_set(&ctx->queued, 0);
+	atomic_set(&ctx->rx_seen, 0);
+	ctx->rx_wq = alloc_workqueue("p472_tg_apr_rx",
+				    WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
+	if (!ctx->rx_wq)
+		return -ENOMEM;
+	INIT_WORK(&ctx->ready_work, p472_tg_apr_ready_work);
+	dev_set_drvdata(&rpdev->dev, ctx);
+	apr_ch->handle = rpdev;
+	apr_ch->channel_state = APR_CH_CONNECTED;
+	wake_up(&apr_ch->wait);
+	dev_info(&rpdev->dev,
+		 "P472 TG APR_TAL dest=adsp remote-pid=%u hdr_dynamic=1 max_pkt=8192\n",
+		 remote_pid);
+	rc = schedule_work(&ctx->ready_work) ? 0 : -EBUSY;
+	if (rc) {
+		apr_ch->handle = NULL;
+		apr_ch->channel_state = APR_CH_DISCONNECTED;
+		dev_set_drvdata(&rpdev->dev, NULL);
+		destroy_workqueue(ctx->rx_wq);
 	}
-	if(strstr(dest, "adsp")) {
-		apr_ch =
-		&apr_svc_ch[APR_DL_SMD][APR_DEST_QDSP6][APR_CLIENT_AUDIO];
-		apr_ch->handle = rpdev;
-		apr_ch->channel_state = APR_CH_CONNECTED;
-		dev_set_drvdata(&rpdev->dev, apr_ch);
-		wake_up(&apr_ch->wait);
-	} else if(strstr(dest, "mpss")) {
-		apr_ch =
-		&apr_svc_ch[APR_DL_SMD][APR_DEST_MODEM][APR_CLIENT_AUDIO];
-		apr_ch->handle = rpdev;
-		apr_ch->channel_state = APR_CH_CONNECTED;
-		dev_set_drvdata(&rpdev->dev, apr_ch);
-		wake_up(&apr_ch->wait);
-	} else {
-		dev_err(&rpdev->dev, "%s, unsupported dest %s\n",
-			__func__, dest);
-		return -EINVAL;
-	}
-
-	return ret;
+	return rc;
 }
 
 static void apr_tal_rpmsg_remove(struct rpmsg_device *rpdev)
 {
-	struct apr_svc_ch_dev *apr_ch = dev_get_drvdata(&rpdev->dev);
+	struct p472_tg_ctx *ctx = dev_get_drvdata(&rpdev->dev);
+	struct apr_svc_ch_dev *apr_ch;
 
-	if (!apr_ch) {
-		dev_err(&rpdev->dev, "%s: Invalid apr_ch\n", __func__);
+	if (!ctx)
 		return;
-	}
-
-	dev_info(&rpdev->dev, "%s: Channel[%s] state[Down]\n",
-		 __func__, rpdev->id.name);
-	apr_ch->handle = NULL;
+	apr_ch = ctx->channel;
+	WRITE_ONCE(ctx->removing, true);
+	cancel_work_sync(&ctx->ready_work);
+	complete_all(&ctx->state_completion);
+	destroy_workqueue(ctx->rx_wq);
 	apr_ch->channel_state = APR_CH_DISCONNECTED;
+	apr_ch->handle = NULL;
+	p472_tg_apr_a0b_down();
 	dev_set_drvdata(&rpdev->dev, NULL);
+	dev_info(&rpdev->dev,
+		 "P472 TG APR_TAL channel=down pending=0 queued=%d\n",
+		 atomic_read(&ctx->queued));
 }
 
 static const struct rpmsg_device_id apr_tal_rpmsg_match[] = {
@@ -290,7 +455,7 @@ int apr_tal_init(void)
 	int i, j, k;
 	int ret;
 
-	memset(apr_svc_ch, 0, sizeof(struct apr_svc_ch_dev));
+	memset(apr_svc_ch, 0, sizeof(apr_svc_ch));
 	for (i = 0; i < APR_DL_MAX; i++) {
 		for (j = 0; j < APR_DEST_MAX; j++) {
 			for (k = 0; k < APR_CLIENT_MAX; k++) {
