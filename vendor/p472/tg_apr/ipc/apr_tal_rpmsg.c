@@ -17,6 +17,7 @@
 #include <linux/completion.h>
 #include <linux/workqueue.h>
 #include <linux/srcu.h>
+#include <linux/hardirq.h>
 #include <ipc/apr.h>
 
 enum apr_channel_state {
@@ -29,10 +30,19 @@ enum apr_channel_state {
 #define P472_TG_APR_GET_STATE 0x0001290c
 #define P472_TG_APR_GET_STATE_RSP 0x0001290d
 #define P472_TG_APR_RX_MAX 8192
-#define P472_TG_APR_RX_BOUND 32
+#define P472_TG_APR_RX_BOUND 256
 #define P472_TG_APR_WAIT_MS 100
 #define P472_TG_APR_POLL_MS 50
 #define P472_TG_APR_DEADLINE_MS 10000
+
+/* EXPERIMENTAL only: direct APR callbacks may sleep under TG's r_lock.
+ * Leave disabled during normal phone operation.
+ */
+static bool p472_tg_apr_sync_rx;
+module_param_named(sync_rx_experimental, p472_tg_apr_sync_rx, bool, 0600);
+MODULE_PARM_DESC(sync_rx_experimental,
+	"Unsafe TG-style synchronous RX callback (default off)");
+static atomic64_t p472_tg_apr_rx_drops = ATOMIC64_INIT(0);
 
 extern void p472_tg_apr_a0b_ready(void);
 extern void p472_tg_apr_a0b_down(void);
@@ -57,6 +67,32 @@ struct p472_tg_rx_packet {
 	u8 data[];
 };
 static DEFINE_SRCU(p472_tg_rx_srcu);
+
+/* Each RX drop increments the count. Ratelimited printk may coalesce logs.
+ * Partial headers have svc=-1/opcode=0 until those fields are available.
+ */
+static int p472_tg_apr_rx_drop(struct rpmsg_device *rpdev,
+				const void *data, int len, int error,
+				const char *reason)
+{
+	const struct apr_hdr *hdr = data;
+	s64 n = atomic64_inc_return(&p472_tg_apr_rx_drops);
+	int svc = -1;
+	u32 opcode = 0;
+	__le32 wire;
+
+	if (data && len > offsetof(struct apr_hdr, dest_svc))
+		svc = hdr->dest_svc;
+	if (data && len >= sizeof(*hdr)) {
+		memcpy(&wire, (const u8 *)data + offsetof(struct apr_hdr, opcode),
+		       sizeof(wire));
+		opcode = le32_to_cpu(wire);
+	}
+	dev_warn_ratelimited(&rpdev->dev,
+		"P472 TG APR_RX_DROP count=%lld reason=%s rc=%d len=%d svc=%d opcode=0x%08x\n",
+		(long long)n, reason, error, len, svc, opcode);
+	return error;
+}
 
 
 static struct apr_svc_ch_dev
@@ -244,6 +280,9 @@ static void p472_tg_apr_rx_work(struct work_struct *work)
 		priv = READ_ONCE(ch->priv);
 		if (func)
 			func(packet->data, packet->len, priv);
+		else
+			p472_tg_apr_rx_drop(packet->ctx->rpdev, packet->data,
+				packet->len, -ENOTCONN, "no_apr_callback");
 		srcu_read_unlock(&p472_tg_rx_srcu, idx);
 	}
 	atomic_dec(&packet->ctx->queued);
@@ -311,12 +350,14 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 	struct p472_tg_rx_packet *packet;
 	const struct apr_hdr *hdr = data;
 	int seen;
+	int idx;
 	unsigned long flags;
 	u16 hdr_len;
 	__le32 state;
 
 	if (!ctx || READ_ONCE(ctx->removing) || !data)
-		return -ENODEV;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -ENODEV,
+					     "channel_unavailable");
 	seen = atomic_inc_return(&ctx->rx_seen);
 	if (seen <= 32) {
 		dev_info(&rpdev->dev,
@@ -327,11 +368,13 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 				       min_t(int, len, 512), false);
 	}
 	if (len < sizeof(*hdr) || len > P472_TG_APR_RX_MAX)
-		return -EMSGSIZE;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -EMSGSIZE,
+					     "packet_size");
 	hdr_len = ((hdr->hdr_field >> 4) & 0x0f) * 4;
 	if (hdr_len < sizeof(*hdr) || hdr_len > len ||
 	    hdr->pkt_size != len)
-		return -EPROTO;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -EPROTO,
+					     "invalid_apr_header");
 	if (hdr->opcode == P472_TG_APR_GET_STATE_RSP &&
 	    hdr->src_domain == APR_DOMAIN_ADSP &&
 	    hdr->src_svc == APR_SVC_ADSP_CORE &&
@@ -341,16 +384,46 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 		complete(&ctx->state_completion);
 		return 0;
 	}
-	/* Never invoke apr_cb_func or a Q6 client in RPMSG RX context. */
+	/* Diagnostic-only direct TG dispatch. Never call client code from an
+	 * atomic/IRQ context. Otherwise keep serialized deferred delivery.
+	 * Client callbacks can still sleep; direct spinlocked dispatch is unsafe
+	 * unless each registered client was audited as strictly non-sleeping.
+	 */
+	if (unlikely(READ_ONCE(p472_tg_apr_sync_rx))) {
+		if (in_interrupt() || in_atomic() || irqs_disabled() ||
+		    atomic_read(&ctx->queued)) {
+			dev_warn_ratelimited(&rpdev->dev,
+				"P472 TG APR_SYNC_FALLBACK atomic_or_queued=1\n");
+		} else {
+			struct apr_svc_ch_dev *ch = ctx->channel;
+			apr_svc_cb_fn func;
+			void *p;
+
+			idx = srcu_read_lock(&p472_tg_rx_srcu);
+			spin_lock_irqsave(&ch->r_lock, flags);
+			func = READ_ONCE(ch->func);
+			p = READ_ONCE(ch->priv);
+			if (func && !READ_ONCE(ctx->removing))
+				func(data, len, p);
+			spin_unlock_irqrestore(&ch->r_lock, flags);
+			srcu_read_unlock(&p472_tg_rx_srcu, idx);
+			if (!func || READ_ONCE(ctx->removing))
+				return p472_tg_apr_rx_drop(rpdev, data, len,
+						-ENOTCONN, "sync_unavailable");
+			return 0;
+		}
+	}
 	if (!ctx->rx_wq || atomic_inc_return(&ctx->queued) >
 	    P472_TG_APR_RX_BOUND) {
 		atomic_dec(&ctx->queued);
-		return -ENOSPC;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -ENOSPC,
+					     "queue_full");
 	}
 	packet = kmalloc(sizeof(*packet) + len, GFP_ATOMIC);
 	if (!packet) {
 		atomic_dec(&ctx->queued);
-		return -ENOMEM;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -ENOMEM,
+					     "alloc_failure");
 	}
 	packet->ctx = ctx;
 	packet->len = len;
@@ -364,13 +437,15 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 		spin_unlock_irqrestore(&ctx->rx_lock, flags);
 		atomic_dec(&ctx->queued);
 		kfree(packet);
-		return -ENODEV;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -ENODEV,
+					     "remove_race");
 	}
 	if (!queue_work(ctx->rx_wq, &packet->work)) {
 		spin_unlock_irqrestore(&ctx->rx_lock, flags);
 		atomic_dec(&ctx->queued);
 		kfree(packet);
-		return -EIO;
+		return p472_tg_apr_rx_drop(rpdev, data, len, -EIO,
+					     "queue_work_failed");
 	}
 	spin_unlock_irqrestore(&ctx->rx_lock, flags);
 	return 0;
@@ -449,11 +524,14 @@ static void apr_tal_rpmsg_remove(struct rpmsg_device *rpdev)
 	cancel_work_sync(&ctx->ready_work);
 	complete_all(&ctx->state_completion);
 	destroy_workqueue(ctx->rx_wq);
+	/* Drain any opt-in synchronous RX callback before devm releases ctx. */
+	synchronize_srcu(&p472_tg_rx_srcu);
 	p472_tg_apr_a0b_down();
 	dev_set_drvdata(&rpdev->dev, NULL);
 	dev_info(&rpdev->dev,
-		 "P472 TG APR_TAL channel=down pending=0 queued=%d\n",
-		 atomic_read(&ctx->queued));
+		 "P472 TG APR_TAL channel=down pending=0 queued=%d rx_drops=%lld\n",
+		 atomic_read(&ctx->queued),
+		 (long long)atomic64_read(&p472_tg_apr_rx_drops));
 }
 
 static const struct rpmsg_device_id apr_tal_rpmsg_match[] = {
