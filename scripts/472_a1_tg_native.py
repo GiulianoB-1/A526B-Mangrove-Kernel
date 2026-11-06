@@ -88,6 +88,17 @@ def validate(root):
         raise RuntimeError("P472 PDR-only registration path not disabled")
     if staged_notifier.count("#ifdef CONFIG_MSM_QDSP6_PDR") < 3:
         raise RuntimeError("P472 PDR-only opcode guards incomplete")
+    cal_header = (d/"include/dsp/audio_cal_utils.h").read_text()
+    for required in ("#include <linux/dma-buf.h>",
+                     "#include <linux/list.h>",
+                     "#include <linux/mutex.h>",
+                     "#include <linux/msm_audio_calibration.h>"):
+        if required not in cal_header:
+            raise RuntimeError("P472 q6core cal header required: " + required)
+    for excluded in ("#include <linux/msm_ion.h>",
+                     "#include <dsp/msm_audio_ion.h>"):
+        if excluded in cal_header:
+            raise RuntimeError("P472 q6core compile-only header pulls legacy ION: " + excluded)
     dsp_make = (d/"dsp/Makefile").read_text()
     if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
         raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
@@ -108,7 +119,7 @@ def validate(root):
         "audio_notifier":"real TG notifier implementation on P472 config",
         "snd_event":"real TG sound event implementation on P472 config",
         "audio_pdr":"off; PDR-only header and opcode paths guarded in staged copy",
-        "q6core":"object-only; not linked",
+        "q6core":"compile-only; calibration types retained; legacy ION transitive header excluded; not linked",
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
         "no_arm":True,"flash_authorized":False}
@@ -193,6 +204,25 @@ def main():
                 case, "#ifdef CONFIG_MSM_QDSP6_PDR\n" + case + "\n#endif", 1
             )
         notifier.write_text(content)
+        # The q6core object-only probe needs calibration STRUCTURES, not
+        # the 4.19 ION allocator implementation. Audio calibration uses
+        # dma_buf pointers, a mutex and a list. Do not invent ION APIs.
+        # When the actual cal_utils driver is linked, it must include
+        # the separately ported msm_audio_ion interface directly.
+        cal_header = dest/"include/dsp/audio_cal_utils.h"
+        cal_text = cal_header.read_text()
+        old_headers = ("#include <linux/msm_ion.h>\\n"
+                       "#include <linux/msm_audio_calibration.h>\\n"
+                       "#include <dsp/msm_audio_ion.h>\\n"
+                       "#include <dsp/audio_calibration.h>\\n").replace("\\n", "\n")
+        new_headers = ("#include <linux/dma-buf.h>\\n"
+                       "#include <linux/list.h>\\n"
+                       "#include <linux/mutex.h>\\n"
+                       "#include <linux/msm_audio_calibration.h>\\n"
+                       "#include <dsp/audio_calibration.h>\\n").replace("\\n", "\n")
+        if cal_text.count(old_headers) != 1:
+            raise RuntimeError("P472 TG calibration header include closure changed")
+        cal_header.write_text(cal_text.replace(old_headers, new_headers, 1))
         for path,content in MK.items(): (dest/path).write_text(content)
         k=a.root/"drivers/soc/qcom/Kconfig"
         m=a.root/"drivers/soc/qcom/Makefile"
