@@ -75,8 +75,13 @@ def validate(root):
                 "include/soc/snd_event.h"):
         if "CONFIG_P472_TG_APR" not in (d/rel).read_text():
             raise RuntimeError("P472 native TG audio provider not selected: " + rel)
-    if '#include <soc/qcom/service-notifier.h>' in (d/"dsp/audio_notifier.c").read_text():
+    staged_notifier = (d/"dsp/audio_notifier.c").read_text()
+    if '#include <soc/qcom/service-notifier.h>' in staged_notifier:
         raise RuntimeError("P472 TG disabled PDR header leaked into GKI")
+    if staged_notifier.count("#ifndef CONFIG_MSM_QDSP6_PDR") != 1:
+        raise RuntimeError("P472 PDR-only registration path not disabled")
+    if staged_notifier.count("#ifdef CONFIG_MSM_QDSP6_PDR") < 3:
+        raise RuntimeError("P472 PDR-only opcode guards incomplete")
     dsp_make = (d/"dsp/Makefile").read_text()
     if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
         raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
@@ -92,7 +97,7 @@ def validate(root):
         "audio_ssr":"real TG SSR implementation on P472 config",
         "audio_notifier":"real TG notifier implementation on P472 config",
         "snd_event":"real TG sound event implementation on P472 config",
-        "audio_pdr":"off; PDR-only service-notifier header excluded in staged copy",
+        "audio_pdr":"off; PDR-only header and opcode paths guarded in staged copy",
         "q6core":"object-only; not linked",
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
@@ -142,7 +147,42 @@ def main():
         legacy = "#include <soc/qcom/service-notifier.h>\\n".replace("\\n", "\n")
         if content.count(legacy) != 1:
             raise RuntimeError("P472 TG notifier PDR-only include differs")
-        notifier.write_text(content.replace(legacy, "", 1))
+        content = content.replace(legacy, "", 1)
+        # SERVICE_STATE_* constants are defined by the removed QMI PDR
+        # notifier header, not by SSR. Preserve the original TG code
+        # only under CONFIG_MSM_QDSP6_PDR and fail closed otherwise.
+        pdr_case = """\tcase AUDIO_NOTIFIER_PDR_SERVICE:
+\t\thandle = audio_pdr_service_register("""
+        if content.count(pdr_case) != 1:
+            raise RuntimeError("P472 notifier PDR registration site changed")
+        content = content.replace(
+            pdr_case,
+            """\tcase AUDIO_NOTIFIER_PDR_SERVICE:
+#ifndef CONFIG_MSM_QDSP6_PDR
+\t\treturn -EOPNOTSUPP;
+#else
+\t\thandle = audio_pdr_service_register(""",
+            1,
+        )
+        pdr_end = """\t\telse
+\t\t\tcurr_state = AUDIO_NOTIFIER_SERVICE_DOWN;
+\t\tbreak;"""
+        if content.count(pdr_end) != 1:
+            raise RuntimeError("P472 notifier PDR registration end changed")
+        content = content.replace(
+            pdr_end, pdr_end.replace("\t\tbreak;", "#endif\n\t\tbreak;"), 1
+        )
+        for macro in (
+            "SERVREG_NOTIF_SERVICE_STATE_DOWN_V01",
+            "SERVREG_NOTIF_SERVICE_STATE_UP_V01",
+        ):
+            case = "\tcase " + macro + ":"
+            if content.count(case) != 1:
+                raise RuntimeError("P472 notifier PDR-only opcode changed: " + macro)
+            content = content.replace(
+                case, "#ifdef CONFIG_MSM_QDSP6_PDR\n" + case + "\n#endif", 1
+            )
+        notifier.write_text(content)
         for path,content in MK.items(): (dest/path).write_text(content)
         k=a.root/"drivers/soc/qcom/Kconfig"
         m=a.root/"drivers/soc/qcom/Makefile"
