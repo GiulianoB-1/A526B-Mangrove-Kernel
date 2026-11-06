@@ -418,8 +418,10 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 			return 0;
 		}
 	}
-	if (!ctx->rx_wq || atomic_inc_return(&ctx->queued) >
-	    P472_TG_APR_RX_BOUND) {
+	if (!ctx->rx_wq)
+		return p472_tg_apr_rx_drop(rpdev, data, len, -ENODEV,
+					     "queue_unavailable");
+	if (atomic_inc_return(&ctx->queued) > P472_TG_APR_RX_BOUND) {
 		atomic_dec(&ctx->queued);
 		return p472_tg_apr_rx_drop(rpdev, data, len, -ENOSPC,
 					     "queue_full");
