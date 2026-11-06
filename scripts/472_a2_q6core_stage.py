@@ -150,8 +150,16 @@ def stage(root, tg):
     src = one(src, "#include <linux/ion_kernel.h>",
               "#include <linux/dma-heap.h>\n#include <dsp/q6asm-v2.h>",
               "native DMA heap API and struct audio_buffer")
-    src = one(src, "\tunsigned long ionflag = 0;\n", "",
-              "legacy mapping cache flags")
+    # Two identical locals exist in TG (mapping and cache path);
+    # drop only the mapping local, then replace the entire cache body.
+    mapping_fn = src.index("static int msm_audio_dma_buf_map(")
+    mapping_end = src.index("static int msm_audio_dma_buf_unmap(", mapping_fn)
+    prefix, mapping, suffix = (src[:mapping_fn],
+                               src[mapping_fn:mapping_end],
+                               src[mapping_end:])
+    mapping = one(mapping, "\tunsigned long ionflag = 0;\n", "",
+                  "legacy mapping cache flags")
+    src = prefix + mapping + suffix
     old_sync = '''\t/* For uncached buffers, avoid cache maintanance */
 \trc = dma_buf_get_flags(alloc_data->dma_buf, &ionflag);
 \tif (rc) {
