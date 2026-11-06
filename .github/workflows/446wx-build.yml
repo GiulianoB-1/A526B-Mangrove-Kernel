@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 TG APR drop256 + guarded sync + exclusive owner, q6core probe (NO ARM)
+run-name: P472 A2 TG q6core + real calibration/DMA-BUF linker probe (NO ARM)
 on:
   push:
     branches:
@@ -40,6 +40,7 @@ on:
       - agent/p472-a1-gate0-h01-combined-no-arm
       - agent/p472-a1-tg-apr-trio-q6core-probe-no-arm
       - agent/p472-a1-tg-apr-drop256-sync-ci-no-arm
+      - agent/p472-a2-q6core-cal-ion-native-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1739,6 +1740,11 @@ jobs:
           python3 scripts/472_a1_tg_native.py --root "$ROOT" --repo "$PWD" \
             --report phase447-inventory/P472-A1-TG-APR-SOURCE.json
           python3 scripts/472_a1_tg_native.py --root "$ROOT" --check-only
+          python3 -m py_compile scripts/472_a2_q6core_stage.py
+          python3 scripts/472_a2_q6core_stage.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --report phase447-inventory/P472-A2-Q6CORE-SOURCE.json
+          python3 scripts/472_a2_q6core_stage.py --root "$ROOT" --check-only
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1760,7 +1766,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --disable P472_TG_Q6CORE \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --enable DMABUF_HEAPS --enable DMABUF_HEAPS_SYSTEM \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1781,10 +1787,16 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
+          grep -Fxq 'CONFIG_P472_TG_Q6CORE=y' "$BUILD/.config" || {
+            echo "::error title=P472 A2 TG q6core Kconfig refused"; exit 1
+          }
+          grep -Fxq 'CONFIG_DMABUF_HEAPS=y' "$BUILD/.config" || {
+            echo "::error title=P472 A2 DMA-BUF heap unavailable"; exit 1
+          }
           grep -Fxq 'CONFIG_P472_TG_APR=y' "$BUILD/.config" || {
             echo "::error title=P472 TG APR Kconfig refused"; exit 1;
           }
-          for cfg in P472_A0_APR_Q6CORE P472_A1_APR_DISPATCH P472_TG_Q6CORE; do
+          for cfg in P472_A0_APR_Q6CORE P472_A1_APR_DISPATCH; do
             if grep -Eq "^CONFIG_${cfg}=[ym]$" "$BUILD/.config"; then
               echo "::error title=P472 conflicting APR provider::$cfg"; exit 1;
             fi
@@ -1912,13 +1924,14 @@ jobs:
             LLVM=1 LLVM_IAS=1 drivers/soc/qcom/p472_tg_audio/dsp/q6core.o
           test -s "$BUILD/drivers/soc/qcom/p472_tg_audio/dsp/q6core.o"
           # extra-y is compile-only. It must not add q6core to the linked Image.
-          if grep -Eq '[[:space:]]q6core_probe$' "$BUILD/System.map"; then
-            echo "::error title=P472::q6core linked without calibration/ION"; exit 1
-          fi
-          grep -Fxq '# CONFIG_P472_TG_Q6CORE is not set' "$BUILD/.config" || {
-            echo "::error title=P472::q6core must remain compile-only"; exit 1
-          }
-          echo 'P472 q6core object compiled via extra-y, not linked; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          for sym in q6core_probe core_init audio_cal_init cal_utils_create_cal_types msm_audio_ion_init msm_audio_ion_alloc msm_audio_populate_upper_32_bits; do
+            grep -Eq "[[:space:]]${sym}$" "$BUILD/System.map" || {
+              echo "::error title=P472 A2::linked TG q6core/cal/ION symbol missing::$sym"; exit 1
+            }
+          done
+          grep -aFq 'P472 A2 TG Q6CORE_LINKED cal=1 ion_dma_heap=1 init_rc=0' "$BUILD/arch/arm64/boot/Image"
+          grep -aFq 'P472 A2 AUDIO_HEAP_MISSING name=%s' "$BUILD/arch/arm64/boot/Image"
+          echo 'P472 A2 linked real TG q6core+calibration+DMA-BUF heap; APR owner unchanged; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
@@ -2085,7 +2098,7 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P472-A2-TG-Q6CORE-CAL-DMABUF-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
             phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
@@ -2100,6 +2113,7 @@ jobs:
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
             phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
+            phase447-inventory/P472-A2-Q6CORE-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
