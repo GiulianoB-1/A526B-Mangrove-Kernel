@@ -1911,7 +1911,14 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 drivers/soc/qcom/p472_tg_audio/dsp/q6core.o
           test -s "$BUILD/drivers/soc/qcom/p472_tg_audio/dsp/q6core.o"
-          echo 'P472 q6core object compiled, not yet linked; audio card absent; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          # extra-y is compile-only. It must not add q6core to the linked Image.
+          if grep -Eq '[[:space:]]q6core_probe$' "$BUILD/System.map"; then
+            echo "::error title=P472::q6core linked without calibration/ION"; exit 1
+          fi
+          grep -Fxq '# CONFIG_P472_TG_Q6CORE is not set' "$BUILD/.config" || {
+            echo "::error title=P472::q6core must remain compile-only"; exit 1
+          }
+          echo 'P472 q6core object compiled via extra-y, not linked; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
