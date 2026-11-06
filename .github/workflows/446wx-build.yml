@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 TG APR drop256 + guarded sync + exclusive owner, q6core probe (NO ARM)
+run-name: P474 NORMAL/nohlt vs HLT boot paired with working P472 APR (NO ARM)
 on:
   push:
     branches:
@@ -40,6 +40,7 @@ on:
       - agent/p472-a1-gate0-h01-combined-no-arm
       - agent/p472-a1-tg-apr-trio-q6core-probe-no-arm
       - agent/p472-a1-tg-apr-drop256-sync-ci-no-arm
+      - agent/p474-hlt-boot-pair-from-hw-apr-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1739,6 +1740,10 @@ jobs:
           python3 scripts/472_a1_tg_native.py --root "$ROOT" --repo "$PWD" \
             --report phase447-inventory/P472-A1-TG-APR-SOURCE.json
           python3 scripts/472_a1_tg_native.py --root "$ROOT" --check-only
+          python3 -m py_compile scripts/474_idle_stage.py scripts/474_hlt_pair.py
+          python3 scripts/474_idle_stage.py --root "$ROOT" \
+            --report phase447-inventory/P474-IDLE-SOURCE.json
+          python3 scripts/474_idle_stage.py --root "$ROOT" --check-only
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1906,6 +1911,10 @@ jobs:
               echo "::error title=P472 TG APR Image marker absent::$marker"; exit 1;
             }
           done
+          grep -aFq 'P474 CMDLINE nohlt=%d cpu_idle_force_poll=%d' "$BUILD/arch/arm64/boot/Image" || {
+            echo "::error title=P474::cpu_idle_force_poll marker absent"; exit 1
+          }
+          echo 'P474 real cpu_idle_force_poll state reporter linked in native Image.' >> "$GITHUB_STEP_SUMMARY"
           echo 'P472 native TG APR trio linked; q6core compilation probe next.' >> "$GITHUB_STEP_SUMMARY"
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -2054,6 +2063,12 @@ jobs:
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+          python3 scripts/474_hlt_pair.py \
+            --normal phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+            --hlt phase447b-variants/MANGROVE-P474-HLT-NO-ARM.boot.img \
+            --image "$BUILD/arch/arm64/boot/Image" \
+            --report phase447-inventory/P474-CMDLINE-PAIR.json
+          echo 'P474 paired boots verified: only nohlt removal changes cmdline; native Image and other boot parts identical.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
@@ -2085,9 +2100,12 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P474-APR-HLT-PAIR-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
             phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P474-HLT-NO-ARM.boot.img
+            phase447-inventory/P474-CMDLINE-PAIR.json
+            phase447-inventory/P474-IDLE-SOURCE.json
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
