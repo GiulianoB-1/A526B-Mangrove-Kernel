@@ -186,6 +186,13 @@ def stage(root, tg):
     if old_cache.count("ION_FLAG_CACHED") != 1 or old_cache.count("dma_buf_begin_cpu_access") != 1:
         raise RuntimeError("P472 A2 cache operation donor body changed")
     src = src[:start] + CACHES + src[end:]
+    # TG initializes the list only for SMMU-enabled probes.
+    # Initialize it on every driver registration as well, otherwise the
+    # non-SMMU audio carveout path dereferences an uninitialized list.
+    src = one(src,
+              "int __init msm_audio_ion_init(void)\\n{\\n\\treturn platform_driver_register(&msm_audio_ion_driver);".replace("\\n", "\n").replace("\\t", "\t"),
+              "int __init msm_audio_ion_init(void)\\n{\\n\\tINIT_LIST_HEAD(&msm_audio_ion_data.alloc_list);\\n\\tmutex_init(&msm_audio_ion_data.list_mutex);\\n\\treturn platform_driver_register(&msm_audio_ion_driver);".replace("\\n", "\n").replace("\\t", "\t"),
+              "allocator list safety on non-SMMU path")
     ion.write_text(src)
     init = dest / "dsp/p472_a2_q6core_boot.c"
     init.write_text(INIT)
@@ -208,6 +215,7 @@ def validate(root):
         "tg_dma_buffer_import": "dma_buf_get(fd)" in ion,
         "tg_dma_buffer_unmap": "dma_buf_unmap_attachment(" in ion,
         "tg_smmu_sid": "MSM_AUDIO_SMMU_SID_OFFSET" in ion,
+        "non_smmu_list_initialized": "INIT_LIST_HEAD(&msm_audio_ion_data.alloc_list);" in ion,
         "tg_calibration_link": "audio_calibration.o audio_cal_utils.o" in mk,
         "q6core_linked_source": "obj-$(CONFIG_P472_TG_Q6CORE) += q6core.o" in mk,
         "adsp_error_and_init": "adsp_err.o p472_a2_q6core_boot.o" in mk,
