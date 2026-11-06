@@ -75,6 +75,8 @@ def validate(root):
                 "include/soc/snd_event.h"):
         if "CONFIG_P472_TG_APR" not in (d/rel).read_text():
             raise RuntimeError("P472 native TG audio provider not selected: " + rel)
+    if '#include <soc/qcom/service-notifier.h>' in (d/"dsp/audio_notifier.c").read_text():
+        raise RuntimeError("P472 TG disabled PDR header leaked into GKI")
     dsp_make = (d/"dsp/Makefile").read_text()
     if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
         raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
@@ -90,7 +92,7 @@ def validate(root):
         "audio_ssr":"real TG SSR implementation on P472 config",
         "audio_notifier":"real TG notifier implementation on P472 config",
         "snd_event":"real TG sound event implementation on P472 config",
-        "audio_pdr":"deferred; not compiled until service-notifier source closure",
+        "audio_pdr":"off; PDR-only service-notifier header excluded in staged copy",
         "q6core":"object-only; not linked",
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
@@ -131,6 +133,16 @@ def main():
             if body.count(old) != 1:
                 raise RuntimeError("P472 native TG provider guard changed: " + rel)
             file.write_text(body.replace(old, new))
+        # This 5.10 stage intentionally excludes TG PDR. Its service-
+        # notifier header belongs to the absent legacy PDR framework,
+        # and audio_notifier.c uses no types/macros from that header.
+        # Apply only to the staged copy, preserving the pinned donor.
+        notifier = dest/"dsp/audio_notifier.c"
+        content = notifier.read_text()
+        legacy = "#include <soc/qcom/service-notifier.h>\\n".replace("\\n", "\n")
+        if content.count(legacy) != 1:
+            raise RuntimeError("P472 TG notifier PDR-only include differs")
+        notifier.write_text(content.replace(legacy, "", 1))
         for path,content in MK.items(): (dest/path).write_text(content)
         k=a.root/"drivers/soc/qcom/Kconfig"
         m=a.root/"drivers/soc/qcom/Makefile"
