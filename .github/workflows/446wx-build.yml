@@ -2100,7 +2100,6 @@ jobs:
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
             phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
-            phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
@@ -2151,7 +2150,6 @@ jobs:
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
             phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
-            phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
             phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
