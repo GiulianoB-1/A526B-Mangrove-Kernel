@@ -38,6 +38,7 @@ on:
       - agent/p473-b3-se1-baud-a0-combined-no-arm
       - agent/p472-a1-audio-hdr32-gated-no-arm
       - agent/p472-a1-gate0-h01-combined-no-arm
+      - agent/p472-a1-tg-apr-trio-q6core-probe-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
