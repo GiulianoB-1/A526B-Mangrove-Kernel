@@ -47,7 +47,11 @@ def validate(root):
         if x not in apr: raise RuntimeError("GET_STATE gate missing "+x)
     for x in ("remote_pid != 2", "P472_TG_APR_RX_MAX 8192",
               "P472_TG_APR_GET_STATE_RSP", "GFP_ATOMIC",
-              "P472_TG_APR_RX_BOUND", "srcu_read_lock(",
+              "P472_TG_APR_RX_BOUND 256", "P472 TG APR_RX_DROP count=",
+              "module_param_named(sync_rx_experimental",
+              "P472 TG APR_SYNC_FALLBACK atomic_or_queued=1",
+              "spin_lock_irqsave(&ch->r_lock",
+              "srcu_read_lock(",
               "synchronize_srcu(", "queue_work(ctx->rx_wq"):
         if x not in tal: raise RuntimeError("TG transport missing "+x)
     rx=tal.split("static int apr_tal_rpmsg_callback(",1)[1].split(
@@ -55,6 +59,14 @@ def validate(root):
     for x in ("down_read(", "down_write(", "mutex_lock(", "wait_event(",
               "msleep(", "synchronize_srcu("):
         if x in rx: raise RuntimeError("sleeping in RPMsg RX "+x)
+    # Private A0/A1 RPMsg source must never coexist with TG's sole
+    # apr_audio_svc binding owner in the staged target kernel tree.
+    if (root/"drivers/rpmsg/p472_apr_q6core.c").exists():
+        raise RuntimeError("P472 private APR RPMsg transport still staged")
+    if tal.count('{ "apr_audio_svc" }') != 1:
+        raise RuntimeError("P472 TG apr_audio_svc match table not unique")
+    if "module_rpmsg_driver(p472_driver)" in tal:
+        raise RuntimeError("P472 private RPMsg driver leaked into TG source")
     if "cal_utils_create_cal_types" not in q6 or "core_init(" not in q6:
         raise RuntimeError("TG q6core incomplete")
     if (root/"drivers/soc/qcom/Makefile").read_text().count(MARK)!=1:
@@ -64,7 +76,8 @@ def validate(root):
     return {"stage":"P472-TG-APR-TRIO","api":"TG unchanged",
         "packet_max":8192,"remote_pid":2,
         "ready":"A0b_GET_STATE_before_APR_SUBSYS_LOADED",
-        "rx":"bounded deferred workqueue SRCU",
+        "rx":"256 packet bounded deferred ordered workqueue SRCU, counted drops",
+        "sync":"root-only experimental, default off, atomic/IRQ fallback",
         "q6core":"object-only; not linked",
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
