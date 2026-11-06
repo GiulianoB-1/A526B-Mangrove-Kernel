@@ -21,12 +21,8 @@
 #define APR_DEST_QDSP6 1
 #define APR_DEST_MAX   2
 
-#if defined(CONFIG_MSM_QDSP6_APRV2_GLINK) || \
-	defined(CONFIG_MSM_QDSP6_APRV3_GLINK)
-#define APR_MAX_BUF			512
-#else
-#define APR_MAX_BUF			8092
-#endif
+/* P472 TG GKI APR: preserve the 8192-byte service packet contract. */
+#define APR_MAX_BUF 8192
 
 #define APR_DEFAULT_NUM_OF_INTENTS 20
 
