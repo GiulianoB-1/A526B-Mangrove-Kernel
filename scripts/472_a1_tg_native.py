@@ -23,13 +23,15 @@ subdir-ccflags-y += -I$(src)/include -I$(src)/include/uapi -I$(src)/dsp
 obj-y += dsp/ soc/ ipc/
 """,
 "dsp/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
-obj-y += audio_ssr.o audio_pdr.o audio_notifier.o
+obj-y += audio_ssr.o audio_notifier.o
 obj-$(CONFIG_P472_TG_Q6CORE) += q6core.o
 """,
 "ipc/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
 obj-y += apr_v2.o apr_tal_rpmsg.o apr.o
 """,
-"soc/Makefile":"obj-y += snd_event.o\n"}
+"soc/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
+obj-y += snd_event.o
+"""}
 def validate(root):
     d=root/REL
     apr=(d/"ipc/apr.c").read_text()
@@ -69,6 +71,13 @@ def validate(root):
         raise RuntimeError("P472 private RPMsg driver leaked into TG source")
     if "cal_utils_create_cal_types" not in q6 or "core_init(" not in q6:
         raise RuntimeError("TG q6core incomplete")
+    for rel in ("dsp/audio_ssr.h", "include/dsp/audio_notifier.h",
+                "include/soc/snd_event.h"):
+        if "CONFIG_P472_TG_APR" not in (d/rel).read_text():
+            raise RuntimeError("P472 native TG audio provider not selected: " + rel)
+    dsp_make = (d/"dsp/Makefile").read_text()
+    if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
+        raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
     if (root/"drivers/soc/qcom/Makefile").read_text().count(MARK)!=1:
         raise RuntimeError("Makefile ownership invalid")
     if (root/"drivers/soc/qcom/Kconfig").read_text().count("config P472_TG_APR")!=1:
@@ -78,6 +87,10 @@ def validate(root):
         "ready":"A0b_GET_STATE_before_APR_SUBSYS_LOADED",
         "rx":"256 packet bounded deferred ordered workqueue SRCU, counted drops",
         "sync":"root-only experimental, default off, atomic/IRQ fallback",
+        "audio_ssr":"real TG SSR implementation on P472 config",
+        "audio_notifier":"real TG notifier implementation on P472 config",
+        "snd_event":"real TG sound event implementation on P472 config",
+        "audio_pdr":"deferred; not compiled until service-notifier source closure",
         "q6core":"object-only; not linked",
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
@@ -99,6 +112,25 @@ def main():
                 out=dest/file.relative_to(source)
                 out.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(file,out)
+        # GKI has no original TG audio Kconfig symbols. Bind these
+        # internal provider guards to the one compiled P472 TG APR owner,
+        # without changing the upstream TG public APR API or donor copies.
+        for rel, old, new in (
+            ("dsp/audio_ssr.h",
+             "#ifdef CONFIG_MSM_QDSP6_SSR",
+             "#ifdef CONFIG_P472_TG_APR"),
+            ("include/dsp/audio_notifier.h",
+             "#if IS_ENABLED(CONFIG_MSM_QDSP6_NOTIFIER)",
+             "#if IS_ENABLED(CONFIG_P472_TG_APR)"),
+            ("include/soc/snd_event.h",
+             "#ifdef CONFIG_SND_EVENT",
+             "#ifdef CONFIG_P472_TG_APR"),
+        ):
+            file = dest / rel
+            body = file.read_text()
+            if body.count(old) != 1:
+                raise RuntimeError("P472 native TG provider guard changed: " + rel)
+            file.write_text(body.replace(old, new))
         for path,content in MK.items(): (dest/path).write_text(content)
         k=a.root/"drivers/soc/qcom/Kconfig"
         m=a.root/"drivers/soc/qcom/Makefile"
