@@ -56,6 +56,9 @@ def validate(root):
               "srcu_read_lock(",
               "synchronize_srcu(", "queue_work(ctx->rx_wq"):
         if x not in tal: raise RuntimeError("TG transport missing "+x)
+    if "DEFINE_STATIC_SRCU(p472_tg_rx_srcu);" not in tal or (
+        "static DEFINE_SRCU(p472_tg_rx_srcu);" in tal):
+        raise RuntimeError("P472 GKI 5.10 SRCU declaration must use DEFINE_STATIC_SRCU")
     rx=tal.split("static int apr_tal_rpmsg_callback(",1)[1].split(
         "\nstatic int apr_tal_rpmsg_probe(",1)[0]
     for x in ("down_read(", "down_write(", "mutex_lock(", "wait_event(",
