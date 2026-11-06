@@ -1882,6 +1882,7 @@ jobs:
           for marker in 'P472 A1 APR_HDR_INVALID' 'P472 A1 APR_HDR hdr_field=' \
                         'P472 A1 DISPATCH rx svc=' 'P472 A1 APR_SEND svc=' \
                         'P472 A1 DISPATCH adsp_ready=1' 'P472 A1 DISPATCH adsp_down=1' \
+                        'P452 H0.1 VERIFY_FAIL rc=' 'P452 H0.1 VERIFY_IO streak=' \
                         "P472 A1 BUILD run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA}"; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P472 A1 GATE0 native Image marker missing::$marker"
