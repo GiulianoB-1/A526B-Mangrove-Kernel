@@ -96,6 +96,8 @@ int apr_tal_write(struct apr_svc_ch_dev *apr_ch, void *data,
 	} while (rc == -EAGAIN && retries++ < APR_MAXIMUM_NUM_OF_RETRIES);
 	spin_unlock_irqrestore(&apr_ch->w_lock, flags);
 
+	pr_info_ratelimited("P472 TG APR_SEND_PKT len=%d rpmsg_rc=%d\n",
+			    len, rc);
 	if (rc)
 		pr_err("%s: Unable to send the packet, rc:%d\n", __func__, rc);
 	else
