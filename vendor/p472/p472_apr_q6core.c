@@ -16,6 +16,12 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/rpmsg.h>
+#include <linux/mutex.h>
+#include <linux/rwsem.h>
+#include <linux/notifier.h>
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+#include "p472_a1_apr.h"
+#endif
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
@@ -36,6 +42,7 @@
 #define P472_RX_RAW_MAX_PACKETS        32
 #define P472_RX_RAW_MAX_BYTES         512
 #define P472_MAX_SERVICES             64
+/* P472_A1_APR_REAL_SERVICE_DISPATCH_V1: single RPMSG owner, no second provider. */
 /* P472_A1_APR_VARIABLE_HEADER_V1: TG APR hdr_len = bits[7:4] * 4. */
 
 struct p472_apr_hdr {
@@ -129,6 +136,166 @@ out:
 	return rc;
 }
 
+
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+/* AFE, ASM, ADM and LSM are the TG ADSP services. Modem voice is separate. */
+#define P472_A1_ROUTE_COUNT 0x17
+struct p472_a1_route {
+	p472_a1_rx_fn cb;
+	void *priv;
+};
+static struct p472_a1_route p472_a1_routes[P472_A1_ROUTE_COUNT];
+static DECLARE_RWSEM(p472_a1_routes_lock);
+static DEFINE_MUTEX(p472_a1_tx_lock);
+static struct p472_state *p472_a1_active;
+static BLOCKING_NOTIFIER_HEAD(p472_a1_adsp_notifiers);
+
+static bool p472_a1_allowed(u8 service)
+{
+	return service == P472_A1_SVC_AFE ||
+	       service == P472_A1_SVC_ASM ||
+	       service == P472_A1_SVC_ADM ||
+	       service == P472_A1_SVC_LSM;
+}
+
+/* Registration lifetime is synchronized with read-locked RX dispatch. */
+int p472_a1_apr_register(u8 service, p472_a1_rx_fn cb, void *priv)
+{
+	struct p472_a1_route *route;
+
+	if (!p472_a1_allowed(service) || !cb)
+		return -EINVAL;
+	down_write(&p472_a1_routes_lock);
+	route = &p472_a1_routes[service];
+	if (route->cb) {
+		up_write(&p472_a1_routes_lock);
+		return -EBUSY;
+	}
+	route->priv = priv;
+	route->cb = cb;
+	up_write(&p472_a1_routes_lock);
+	pr_info("P472 A1 DISPATCH register svc=%u rc=0\n", service);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(p472_a1_apr_register);
+
+void p472_a1_apr_unregister(u8 service, p472_a1_rx_fn cb, void *priv)
+{
+	struct p472_a1_route *route;
+
+	if (!p472_a1_allowed(service) || !cb)
+		return;
+	/* Never unregister from inside an APR callback. */
+	down_write(&p472_a1_routes_lock);
+	route = &p472_a1_routes[service];
+	if (route->cb == cb && route->priv == priv) {
+		route->cb = NULL;
+		route->priv = NULL;
+	}
+	up_write(&p472_a1_routes_lock);
+}
+EXPORT_SYMBOL_GPL(p472_a1_apr_unregister);
+
+/* Real ADSP APR service send, never a synthetic response or fake PCM. */
+int p472_a1_apr_send(u8 service, u16 src_port, u16 dest_port,
+		     u32 token, u32 opcode, const void *payload,
+		     size_t payload_len)
+{
+	struct p472_apr_hdr *hdr;
+	struct p472_state *s;
+	size_t bytes;
+	int rc;
+
+	if (!p472_a1_allowed(service) || (payload_len && !payload))
+		return -EINVAL;
+	if (payload_len > P472_RX_RAW_MAX_BYTES - sizeof(*hdr))
+		return -EMSGSIZE;
+	bytes = sizeof(*hdr) + payload_len;
+	hdr = kzalloc(bytes, GFP_KERNEL);
+	if (!hdr)
+		return -ENOMEM;
+	hdr->hdr_field = cpu_to_le16((2 << 8) | (5 << 4));
+	hdr->pkt_size = cpu_to_le16(bytes);
+	hdr->src_domain = P472_APR_DOMAIN_APPS;
+	hdr->dest_domain = P472_APR_DOMAIN_ADSP;
+	hdr->src_svc = service;
+	hdr->dest_svc = service;
+	hdr->src_port = cpu_to_le16(src_port);
+	hdr->dest_port = cpu_to_le16(dest_port);
+	hdr->token = cpu_to_le32(token);
+	hdr->opcode = cpu_to_le32(opcode);
+	if (payload_len)
+		memcpy(hdr + 1, payload, payload_len);
+
+	mutex_lock(&p472_a1_tx_lock);
+	s = p472_a1_active;
+	if (!s || READ_ONCE(s->removing) ||
+	    READ_ONCE(s->adsp_state) == 0 || READ_ONCE(s->reply_rc)) {
+		rc = -ENOTCONN;
+	} else {
+		rc = rpmsg_send(s->rpdev->ept, hdr, bytes);
+	}
+	mutex_unlock(&p472_a1_tx_lock);
+	pr_info("P472 A1 APR_SEND svc=%u opcode=0x%08x token=%u len=%zu rc=%d\n",
+		service, opcode, token, bytes, rc);
+	kfree(hdr);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(p472_a1_apr_send);
+
+int p472_a1_adsp_notifier_register(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&p472_a1_adsp_notifiers, nb);
+}
+EXPORT_SYMBOL_GPL(p472_a1_adsp_notifier_register);
+
+int p472_a1_adsp_notifier_unregister(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&p472_a1_adsp_notifiers, nb);
+}
+EXPORT_SYMBOL_GPL(p472_a1_adsp_notifier_unregister);
+
+static int p472_a1_dispatch_rx(struct rpmsg_device *rpdev,
+			       const struct p472_apr_hdr *h,
+			       const void *payload, size_t payload_len,
+			       size_t hdr_size, int len)
+{
+	const u8 service = h->dest_svc;
+	struct p472_state *s = dev_get_drvdata(&rpdev->dev);
+	struct p472_a1_packet p;
+	struct p472_a1_route *r;
+	int rc;
+
+	if (!p472_a1_allowed(service))
+		return -EPROTO;
+	/* Reject traffic when ADSP state or framework version is not ready. */
+	if (!s || READ_ONCE(s->removing) || !READ_ONCE(s->adsp_state) ||
+	    READ_ONCE(s->reply_rc))
+		return -ENOTCONN;
+	p.service = service;
+	p.src_port = le16_to_cpu(h->src_port);
+	p.dest_port = le16_to_cpu(h->dest_port);
+	p.hdr_len = hdr_size;
+	p.pkt_len = len;
+	p.msg_type = (le16_to_cpu(h->hdr_field) >> 8) & 3;
+	p.token = le32_to_cpu(h->token);
+	p.opcode = le32_to_cpu(h->opcode);
+	p.payload = payload;
+	p.payload_len = payload_len;
+	down_read(&p472_a1_routes_lock);
+	r = &p472_a1_routes[service];
+	if (r->cb)
+		rc = r->cb(&p, r->priv);
+	else
+		rc = -ENODEV;
+	up_read(&p472_a1_routes_lock);
+	dev_info_ratelimited(&rpdev->dev,
+		"P472 A1 DISPATCH rx svc=%u opcode=0x%08x token=%u hdr=%zu payload=%zu rc=%d\n",
+		service, p.opcode, p.token, hdr_size, payload_len, rc);
+	return rc;
+}
+#endif
+
 /*
  * Dump the first 32 packets, including malformed/unexpected APR traffic,
  * before the APR filters. Bound each dump to the 512-byte DT intent size.
@@ -165,9 +332,7 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 		return -EINVAL;
 	if (le16_to_cpu(h->pkt_size) != len ||
 	    h->src_domain != P472_APR_DOMAIN_ADSP ||
-	    h->src_svc != P472_APR_SVC_CORE ||
-	    h->dest_domain != P472_APR_DOMAIN_APPS ||
-	    h->dest_svc != P472_APR_SVC_CORE)
+	    h->dest_domain != P472_APR_DOMAIN_APPS)
 		return -EPROTO;
 	/*
 	 * TG apr_cb_func() decodes hdr_len from hdr_field[7:4] in dwords.
@@ -183,6 +348,14 @@ static int p472_apr_callback(struct rpmsg_device *rpdev, void *data,
 		return -EPROTO;
 	}
 	payload = (const u8 *)data + hdr_size;
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+	if (h->dest_svc != P472_APR_SVC_CORE)
+		return p472_a1_dispatch_rx(rpdev, h, payload, len - hdr_size,
+					   hdr_size, len);
+#endif
+	if (h->src_svc != P472_APR_SVC_CORE ||
+	    h->dest_svc != P472_APR_SVC_CORE)
+		return -EPROTO;
 	if (READ_ONCE(s->removing))
 		return 0;
 
@@ -369,6 +542,14 @@ get_fwk_version:
 	if (rc)
 		dev_err(&rpdev->dev, "P472 A0 APR_TIMEOUT rc=%d reply=%d\n",
 			rc, !!waited);
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+	else {
+		dev_info(&rpdev->dev,
+			 "P472 A1 DISPATCH adsp_ready=1 services=AFE,ASM,ADM,LSM\n");
+		blocking_notifier_call_chain(&p472_a1_adsp_notifiers,
+					     P472_A1_ADSP_UP, NULL);
+	}
+#endif
 }
 
 static int p472_apr_probe(struct rpmsg_device *rpdev)
@@ -418,6 +599,11 @@ static int p472_apr_probe(struct rpmsg_device *rpdev)
 
 	INIT_WORK(&s->query_work, p472_query_work);
 	s->rpdev = rpdev;
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+	mutex_lock(&p472_a1_tx_lock);
+	p472_a1_active = s;
+	mutex_unlock(&p472_a1_tx_lock);
+#endif
 	schedule_work(&s->query_work);
 	return 0;
 }
@@ -428,7 +614,18 @@ static void p472_apr_remove(struct rpmsg_device *rpdev)
 
 	if (s) {
 		WRITE_ONCE(s->removing, true);
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+		mutex_lock(&p472_a1_tx_lock);
+		if (p472_a1_active == s)
+			p472_a1_active = NULL;
+		mutex_unlock(&p472_a1_tx_lock);
+#endif
 		cancel_work_sync(&s->query_work);
+#ifdef CONFIG_P472_A1_APR_DISPATCH
+		blocking_notifier_call_chain(&p472_a1_adsp_notifiers,
+					     P472_A1_ADSP_DOWN, NULL);
+		dev_info(&rpdev->dev, "P472 A1 DISPATCH adsp_down=1 rc=0\n");
+#endif
 		complete_all(&s->state_reply);
 		complete_all(&s->reply);
 		dev_set_drvdata(&rpdev->dev, NULL);
