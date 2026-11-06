@@ -2055,7 +2055,7 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P472-A1-G0-H01-B3-NO-ARM-${{ github.run_number }}
+          name: MANGROVE-P472-A1-DISPATCH-H01-B3-${{ github.run_id }}-${{ github.sha }}
           path: |
             phase447b-variants/MANGROVE-P472-A1-G0-H01-B3-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
