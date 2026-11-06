@@ -265,11 +265,21 @@ enum apr_subsys_state apr_get_q6_state(void)
 }
 EXPORT_SYMBOL(apr_get_q6_state);
 
+/* P472_A1_TG_APR_A0B_READY_GATE_V1: LOADED only after real GET_STATE. */
+static atomic_t p472_tg_a0b_ready = ATOMIC_INIT(0);
+
 int apr_set_q6_state(enum apr_subsys_state state)
 {
 	pr_debug("%s: setting adsp state %d\n", __func__, state);
 	if (state < APR_SUBSYS_DOWN || state > APR_SUBSYS_LOADED)
 		return -EINVAL;
+	if (state == APR_SUBSYS_LOADED &&
+	    !atomic_read(&p472_tg_a0b_ready)) {
+		pr_info_ratelimited("P472 TG APR LOADED blocked=GET_STATE_PENDING\n");
+		return -EAGAIN;
+	}
+	if (state == APR_SUBSYS_DOWN)
+		atomic_set(&p472_tg_a0b_ready, 0);
 	atomic_set(&q6.q6_state, state);
 	return 0;
 }
@@ -305,6 +315,10 @@ static void apr_add_child_devices(struct work_struct *work)
 
 static void apr_adsp_up(void)
 {
+	if (!atomic_read(&p472_tg_a0b_ready)) {
+		pr_info("P472 TG APR EVENT_UP deferred until GET_STATE ready=1\n");
+		return;
+	}
 	pr_info("%s: Q6 is Up\n", __func__);
 	apr_set_q6_state(APR_SUBSYS_LOADED);
 
@@ -317,26 +331,34 @@ static void apr_adsp_up(void)
 
 int apr_load_adsp_image(void)
 {
-	int rc = 0;
-
-	mutex_lock(&q6.lock);
-	if (apr_get_q6_state() == APR_SUBSYS_UP) {
-		q6.pil = subsystem_get("adsp");
-		if (IS_ERR(q6.pil)) {
-			rc = PTR_ERR(q6.pil);
-			pr_err("APR: Unable to load q6 image, error:%d\n", rc);
-		} else {
-			apr_set_q6_state(APR_SUBSYS_LOADED);
-			pr_debug("APR: Image is loaded, stated\n");
-		}
-	} else if (apr_get_q6_state() == APR_SUBSYS_LOADED) {
-		pr_debug("APR: q6 image already loaded\n");
-	} else {
-		pr_debug("APR: cannot load state %d\n", apr_get_q6_state());
-	}
-	mutex_unlock(&q6.lock);
-	return rc;
+	/*
+	 * GKI 5.10 boots ADSP through PAS; never call the removed 4.19
+	 * subsystem_get() path. TG callers retain the same APR API.
+	 */
+	if (!atomic_read(&p472_tg_a0b_ready))
+		return -EAGAIN;
+	return apr_set_q6_state(APR_SUBSYS_LOADED);
 }
+
+/* Called only from the TG RPMSG transport's process-context ready worker. */
+void p472_tg_apr_a0b_ready(void)
+{
+	if (!apr_priv)
+		return;
+	atomic_set(&p472_tg_a0b_ready, 1);
+	pr_info("P472 TG APR GET_STATE ready=1 permit_LOADED=1\n");
+	apr_adsp_up();
+}
+
+void p472_tg_apr_a0b_down(void)
+{
+	atomic_set(&p472_tg_a0b_ready, 0);
+	if (apr_priv)
+		apr_adsp_down(RESET_EVENTS);
+	else
+		apr_set_q6_state(APR_SUBSYS_DOWN);
+}
+
 
 struct apr_client *apr_get_client(int dest_id, int client_id)
 {
