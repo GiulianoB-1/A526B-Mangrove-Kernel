@@ -2074,6 +2074,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-REAL-DISPATCH-SOURCE.json
             phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -2124,6 +2125,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-REAL-DISPATCH-SOURCE.json
             phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
