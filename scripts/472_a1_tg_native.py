@@ -24,6 +24,9 @@ obj-y += dsp/ soc/ ipc/
 """,
 "dsp/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
 obj-y += audio_ssr.o audio_notifier.o
+# Kbuild extra-y compiles q6core.o but does NOT link it into built-in.a.
+# Required for the native probe while P472_TG_Q6CORE remains disabled.
+extra-y += q6core.o
 obj-$(CONFIG_P472_TG_Q6CORE) += q6core.o
 """,
 "ipc/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
@@ -88,6 +91,10 @@ def validate(root):
     dsp_make = (d/"dsp/Makefile").read_text()
     if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
         raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
+    if dsp_make.count("extra-y += q6core.o") != 1:
+        raise RuntimeError("P472 q6core object-only probe missing Kbuild extra-y")
+    if "obj-y += q6core.o" in dsp_make:
+        raise RuntimeError("P472 q6core must not link before calibration closure")
     if (root/"drivers/soc/qcom/Makefile").read_text().count(MARK)!=1:
         raise RuntimeError("Makefile ownership invalid")
     if (root/"drivers/soc/qcom/Kconfig").read_text().count("config P472_TG_APR")!=1:
