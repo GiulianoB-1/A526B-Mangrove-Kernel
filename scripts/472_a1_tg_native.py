@@ -22,10 +22,13 @@ MK={
 subdir-ccflags-y += -I$(src)/include -I$(src)/include/uapi -I$(src)/dsp
 obj-y += dsp/ soc/ ipc/
 """,
-"dsp/Makefile":"""obj-y += audio_ssr.o audio_pdr.o audio_notifier.o
+"dsp/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
+obj-y += audio_ssr.o audio_pdr.o audio_notifier.o
 obj-$(CONFIG_P472_TG_Q6CORE) += q6core.o
 """,
-"ipc/Makefile":"obj-y += apr_v2.o apr_tal_rpmsg.o apr.o\n",
+"ipc/Makefile":"""ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi -I$(srctree)/drivers/soc/qcom/p472_tg_audio/dsp
+obj-y += apr_v2.o apr_tal_rpmsg.o apr.o
+""",
 "soc/Makefile":"obj-y += snd_event.o\n"}
 def validate(root):
     d=root/REL
