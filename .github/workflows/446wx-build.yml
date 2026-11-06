@@ -2059,11 +2059,11 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+            --output phase447b-variants/MANGROVE-P472-A2-Q6CORE-LINKED-NO-ARM.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+            --candidate phase447b-variants/MANGROVE-P472-A2-Q6CORE-LINKED-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
@@ -2072,13 +2072,13 @@ jobs:
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P472-A2-Q6CORE-LINKED-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P472-A1-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P472-A2-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
-          } > phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P472-A2-Q6CORE-LINKED-NO-ARM.boot.img
+          } > phase447-inventory/P472-A2-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2100,7 +2100,7 @@ jobs:
         with:
           name: MANGROVE-P472-A2-TG-Q6CORE-CAL-DMABUF-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P472-A2-Q6CORE-LINKED-NO-ARM.boot.img
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
@@ -2111,7 +2111,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A2-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A2-Q6CORE-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -2162,7 +2162,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A2-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
