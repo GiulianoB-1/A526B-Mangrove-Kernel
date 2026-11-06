@@ -284,6 +284,9 @@ static void p472_tg_apr_rx_work(struct work_struct *work)
 			p472_tg_apr_rx_drop(packet->ctx->rpdev, packet->data,
 				packet->len, -ENOTCONN, "no_apr_callback");
 		srcu_read_unlock(&p472_tg_rx_srcu, idx);
+	} else {
+		p472_tg_apr_rx_drop(packet->ctx->rpdev, packet->data,
+				packet->len, -ENODEV, "removing_drain");
 	}
 	atomic_dec(&packet->ctx->queued);
 	kfree(packet);
@@ -405,9 +408,11 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 			p = READ_ONCE(ch->priv);
 			if (func && !READ_ONCE(ctx->removing))
 				func(data, len, p);
+			else
+				func = NULL;
 			spin_unlock_irqrestore(&ch->r_lock, flags);
 			srcu_read_unlock(&p472_tg_rx_srcu, idx);
-			if (!func || READ_ONCE(ctx->removing))
+			if (!func)
 				return p472_tg_apr_rx_drop(rpdev, data, len,
 						-ENOTCONN, "sync_unavailable");
 			return 0;
