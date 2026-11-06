@@ -60,14 +60,18 @@ def gate(root, tg):
     kconfig = (root / "drivers/rpmsg/Kconfig").read_text()
     if "depends on RPMSG && OF && !QCOM_APR" not in kconfig:
         raise RuntimeError("P472 A1 upstream APR duplicate provider veto missing")
+    if "config P472_A1_APR_DISPATCH" not in kconfig:
+        raise RuntimeError("P472 A1 real APR service dispatcher not configured")
+    if "P472_A1_APR_REAL_SERVICE_DISPATCH_V1" not in s:
+        raise RuntimeError("P472 A1 real dispatcher implementation absent")
     return {
         "phase": "P472-A1-GATE0",
         "status": "SOURCE_ONLY",
         "dynamic_hdr_bytes_supported": [20, 32],
         "tg_apr_reference": str(TG_APR),
         "native_source": str(REL),
-        "dispatched_services": ["CORE diagnostic only"],
-        "audio_notifier_ssr": "NOT_STAGED",
+        "dispatched_services": ["AFE", "ASM", "ADM", "LSM"],
+        "audio_notifier_ssr": "ADSP APR rpmsg edge events only",
         "ion_sid_0x1001": "NOT_STAGED",
         "bolero_soundwire_wcd938x": "NOT_STAGED",
         "machine_card_lito_lagoonmtp": "NOT_STAGED",
