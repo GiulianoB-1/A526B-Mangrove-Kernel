@@ -94,6 +94,7 @@ def check_h0(s):
     if 'dev_err(fg->dev,"P452 H0 REMOVE inhibit FAILED rc=%d\\n",rc);' not in s:
         raise RuntimeError("P457 H0 teardown diagnostic must contain escaped C newline")
     p463 = "P463 CHG_GUARD PM_SYNC" in s
+    h01 = "A52_PHASE452_H01_VBUS44_VERIFY_IO_V1" in s
     required = [
         "A52_PHASE452_H0_MANUAL_SAFE_CHARGER_V1",
         "fg->a52h0_state=\"OFF\";",
@@ -102,13 +103,25 @@ def check_h0(s):
         "if(fg->a52g_inhibit_latched)",
         "if(bt<150 || bt>410 || ct< -200 || ct>=500",
         "return (*b>=150 && *b<=410 && *c>=-200 && *c<500);",
-        "input>0x10",
         "A52H0_MAX_TICKS (14400UL*HZ)",
         "A52H0_FLOAT_4380_CODE 0x27",
         "A52H0_CHG_FAST_500MA 0x20",
         "P452 H0 WDT expired clear FAILED",
         'a52h0_off(fg,"WDT_KICK_FAILED",true)',
     ]
+    if h01:
+        required += [
+            "#define A52H01_MAX_BOOTLOADER_VBUSCNTL 0x44",
+            "input>A52H01_MAX_BOOTLOADER_VBUSCNTL",
+            "P452 H0.1 VERIFY_FAIL rc=%d st1=%d st2=%d factory1=%d batreg=%d vbuscntl=%d id=%d cntl1=%d vcell=%d",
+            "a52h0_off(fg,\"VERIFY_IO\",",
+            "a52h0_off(fg,\"VERIFY_IO_3\",true);",
+            "fg->a52h0_verify_io_streak>=3",
+        ]
+        if "input>0x10" in s:
+            raise RuntimeError("P457 H0.1 old VBUSCNTL max rejected")
+    else:
+        required += ["input>0x10"]
     if not p463:
         required += ["if(a52g_sample(fg,false)<0)",
                      "else a52h0_tick(fg);"]
@@ -265,12 +278,31 @@ def check_h0(s):
     for marker in (
         "#define A52H0_OVERVOLT_FAULT_MV 4430",
         "*vcell>A52H0_OVERVOLT_FAULT_MV",
-        "if(*vcell>4380)return -EOVERFLOW;",
         "if(for_enable && (ctrl&A52G_CHG_ENQ4FET))",
-        "return -EALREADY;",
     ):
         if marker not in (s if marker.startswith("#define") else verify):
             raise RuntimeError("P457 H0 voltage/HANDOVER gate missing " + marker)
+    if h01:
+        expected_transitions = (
+            "if(*vcell>4380) { rc=-EOVERFLOW; goto fail; }",
+            "rc=-EALREADY;",
+            "goto fail;",
+            "if(st<0 || *st2<0 || fc<0 || flt<0 ||",
+            "input>A52H01_MAX_BOOTLOADER_VBUSCNTL",
+            "A52H0_CHG_FAST_500MA 0x20",
+        )
+    else:
+        expected_transitions = (
+            "if(*vcell>4380)return -EOVERFLOW;",
+            "return -EALREADY;",
+        )
+    for marker in expected_transitions:
+        if marker not in (s if marker.startswith("A52H0_CHG_FAST_") else verify):
+            raise RuntimeError("P457 H0 voltage/HANDOVER H0.1 transition missing " + marker)
+    if h01:
+        if "a52h0_write_masked(fg,A52H0_VBUSCNTL" in h0 or \
+           "i2c_smbus_write_byte_data(fg->a52g_chg,A52H0_VBUSCNTL" in h0:
+            raise RuntimeError("P457 H0.1 forbidden VBUSCNTL write")
     for marker in (
         "if(rc==-EOVERFLOW) {",
         "fg->a52h0_full=true;",
