@@ -66,7 +66,7 @@ struct p472_tg_rx_packet {
 	int len;
 	u8 data[];
 };
-static DEFINE_SRCU(p472_tg_rx_srcu);
+DEFINE_STATIC_SRCU(p472_tg_rx_srcu);
 
 /* Each RX drop increments the count. Ratelimited printk may coalesce logs.
  * Partial headers have svc=-1/opcode=0 until those fields are available.
