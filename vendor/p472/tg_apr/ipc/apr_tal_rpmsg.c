@@ -38,6 +38,7 @@ extern void p472_tg_apr_a0b_ready(void);
 extern void p472_tg_apr_a0b_down(void);
 
 struct p472_tg_ctx {
+	spinlock_t rx_lock; /* serialize RX queueing against RPMsg remove */
 	struct rpmsg_device *rpdev;
 	struct apr_svc_ch_dev *channel;
 	struct work_struct ready_work;
@@ -310,6 +311,7 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 	struct p472_tg_rx_packet *packet;
 	const struct apr_hdr *hdr = data;
 	int seen;
+	unsigned long flags;
 	u16 hdr_len;
 	__le32 state;
 
@@ -354,11 +356,23 @@ static int apr_tal_rpmsg_callback(struct rpmsg_device *rpdev,
 	packet->len = len;
 	memcpy(packet->data, data, len);
 	INIT_WORK(&packet->work, p472_tg_apr_rx_work);
+	/* A callback that passed the first removing check must not race
+	 * with destroy_workqueue() in the .remove path.
+	 */
+	spin_lock_irqsave(&ctx->rx_lock, flags);
+	if (ctx->removing || !ctx->rx_wq) {
+		spin_unlock_irqrestore(&ctx->rx_lock, flags);
+		atomic_dec(&ctx->queued);
+		kfree(packet);
+		return -ENODEV;
+	}
 	if (!queue_work(ctx->rx_wq, &packet->work)) {
+		spin_unlock_irqrestore(&ctx->rx_lock, flags);
 		atomic_dec(&ctx->queued);
 		kfree(packet);
 		return -EIO;
 	}
+	spin_unlock_irqrestore(&ctx->rx_lock, flags);
 	return 0;
 }
 
@@ -385,6 +399,7 @@ static int apr_tal_rpmsg_probe(struct rpmsg_device *rpdev)
 		return -ENOMEM;
 	ctx->rpdev = rpdev;
 	ctx->channel = apr_ch;
+	spin_lock_init(&ctx->rx_lock);
 	init_completion(&ctx->state_completion);
 	atomic_set(&ctx->pending, 0);
 	atomic_set(&ctx->queued, 0);
@@ -415,16 +430,25 @@ static void apr_tal_rpmsg_remove(struct rpmsg_device *rpdev)
 {
 	struct p472_tg_ctx *ctx = dev_get_drvdata(&rpdev->dev);
 	struct apr_svc_ch_dev *apr_ch;
+	unsigned long flags;
 
 	if (!ctx)
 		return;
 	apr_ch = ctx->channel;
+	/* Stop new RX work submissions before draining the queue. */
+	spin_lock_irqsave(&ctx->rx_lock, flags);
 	WRITE_ONCE(ctx->removing, true);
+	spin_unlock_irqrestore(&ctx->rx_lock, flags);
+	/* Block APR TX and drop the RPMsg endpoint while in-flight
+	 * rpmsg_trysend() callers are serialized by w_lock.
+	 */
+	spin_lock_irqsave(&apr_ch->w_lock, flags);
+	apr_ch->channel_state = APR_CH_DISCONNECTED;
+	apr_ch->handle = NULL;
+	spin_unlock_irqrestore(&apr_ch->w_lock, flags);
 	cancel_work_sync(&ctx->ready_work);
 	complete_all(&ctx->state_completion);
 	destroy_workqueue(ctx->rx_wq);
-	apr_ch->channel_state = APR_CH_DISCONNECTED;
-	apr_ch->handle = NULL;
 	p472_tg_apr_a0b_down();
 	dev_set_drvdata(&rpdev->dev, NULL);
 	dev_info(&rpdev->dev,
