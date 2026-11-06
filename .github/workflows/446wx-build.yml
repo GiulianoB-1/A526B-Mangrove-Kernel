@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 A1 gate0 APR32 + P452 H0.1 VBUS44 / P471 BT B3 retained (NO ARM)
+run-name: P472 A1 real APRv2 service dispatcher + H0.1 / B3 retained (NO ARM)
 on:
   push:
     branches:
@@ -124,7 +124,7 @@ jobs:
           bash -n scripts/470_compile_real_dataipa_module_probe.sh scripts/470_a1_strict_modpost.sh scripts/470_a2_unstubbed_modpost.sh
           python3 -m py_compile scripts/470_a2_flashability_gate.py scripts/470_a2_real_scm.py scripts/470_a2_smmu_abi_preflight.py scripts/470_a2_lagoon_iommu_reservations.py
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
-          python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py scripts/471_d1_datarmnet_stage.py scripts/471_d1_tg_netfilter_audit.py scripts/473_b1_probe_guard.py scripts/473_b2_se1_pinctrl.py scripts/473_b3_se1_baud.py scripts/472_a0_native.py scripts/472_a1_hdr32_gate.py scripts/472_a1_tg_donor_inventory.py
+          python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py scripts/471_d1_datarmnet_stage.py scripts/471_d1_tg_netfilter_audit.py scripts/473_b1_probe_guard.py scripts/473_b2_se1_pinctrl.py scripts/473_b3_se1_baud.py scripts/472_a0_native.py scripts/472_a1_hdr32_gate.py scripts/472_a1_tg_donor_inventory.py scripts/472_a1_dispatch_stage.py scripts/472_a1_provenance.py
           python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py scripts/470_a6d_ipa_fw_smmu_cb.py scripts/470_a6e_ipa_clients_ready.py scripts/470_a6e_map_initcall_audit.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
@@ -1736,6 +1736,11 @@ jobs:
           python3 scripts/472_a0_native.py --root "$ROOT" --repo "$PWD" \
             --report phase447-inventory/P472-A0-NATIVE-SOURCE.json
           python3 scripts/472_a0_native.py --root "$ROOT" --check-only
+          python3 scripts/472_a1_dispatch_stage.py --root "$ROOT" --repo "$PWD" \
+            --report phase447-inventory/P472-A1-REAL-DISPATCH-SOURCE.json
+          python3 scripts/472_a1_dispatch_stage.py --root "$ROOT" --check-only
+          python3 scripts/472_a1_provenance.py --root "$ROOT"
+          python3 scripts/472_a1_provenance.py --root "$ROOT" --check-only
           python3 scripts/472_a1_hdr32_gate.py --root "$ROOT" \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-APR-HDR-GATE0.json
@@ -1760,7 +1765,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --enable P472_A0_APR_Q6CORE \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --enable P472_A0_APR_Q6CORE --enable P472_A1_APR_DISPATCH \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1781,6 +1786,10 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
+          grep -Fxq 'CONFIG_P472_A1_APR_DISPATCH=y' "$BUILD/.config" || {
+            echo "::error title=P472 A1 real dispatch disabled by Kconfig"
+            exit 1
+          }
           for feature in CONFIG_SERIAL_QCOM_GENI=y CONFIG_P473_TG_BTPOWER=y; do
             grep -Fxq "$feature" "$BUILD/.config" || {
               echo "::error title=P473::genuine TG UART or BTPOWER Kconfig refused::$feature"; exit 1;
@@ -1866,11 +1875,22 @@ jobs:
           python3 scripts/473_b2_se1_pinctrl.py --root "$ROOT" --check-only
           python3 scripts/473_b3_se1_baud.py --root "$ROOT" --check-only
           python3 scripts/472_a0_native.py --root "$ROOT" --check-only
+          python3 scripts/472_a1_dispatch_stage.py --root "$ROOT" --check-only
+          python3 scripts/472_a1_provenance.py --root "$ROOT" --check-only
           python3 scripts/472_a1_hdr32_gate.py --root "$ROOT" \
             --tg "$PWD/workspace/touchgrass-a52xq"
-          for marker in 'P472 A1 APR_HDR_INVALID' 'P472 A1 APR_HDR hdr_field='; do
+          for marker in 'P472 A1 APR_HDR_INVALID' 'P472 A1 APR_HDR hdr_field=' \
+                        'P472 A1 DISPATCH rx svc=' 'P472 A1 APR_SEND svc=' \
+                        'P472 A1 DISPATCH adsp_ready=1' 'P472 A1 DISPATCH adsp_down=1' \
+                        "P472 A1 BUILD run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA}"; do
             grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
               echo "::error title=P472 A1 GATE0 native Image marker missing::$marker"
+              exit 1
+            }
+          done
+          for sym in p472_a1_apr_register p472_a1_apr_unregister p472_a1_apr_send; do
+            grep -Eq "[[:space:]]${sym}$" "$BUILD/System.map" || {
+              echo "::error title=P472 A1 real APR dispatch symbol missing::${sym}"
               exit 1
             }
           done
@@ -2048,6 +2068,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-REAL-DISPATCH-SOURCE.json
             phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2097,6 +2118,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P472-A1-REAL-DISPATCH-SOURCE.json
             phase447-inventory/P472-A1-APR-HDR-GATE0.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
