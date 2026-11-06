@@ -139,6 +139,7 @@ out:
 
 #ifdef CONFIG_P472_A1_APR_DISPATCH
 /* AFE, ASM, ADM and LSM are the TG ADSP services. Modem voice is separate. */
+#define P472_A1_PROVENANCE "P472 A1 BUILD run_id=UNSTAMPED sha=UNSTAMPED"
 #define P472_A1_ROUTE_COUNT 0x17
 struct p472_a1_route {
 	p472_a1_rx_fn cb;
@@ -603,6 +604,7 @@ static int p472_apr_probe(struct rpmsg_device *rpdev)
 	mutex_lock(&p472_a1_tx_lock);
 	p472_a1_active = s;
 	mutex_unlock(&p472_a1_tx_lock);
+	dev_info(&rpdev->dev, P472_A1_PROVENANCE "\n");
 #endif
 	schedule_work(&s->query_work);
 	return 0;
