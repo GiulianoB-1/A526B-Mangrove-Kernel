@@ -142,9 +142,16 @@ def stage(root, tg):
                          "#include <linux/mutex.h>\n#include <dsp/msm_audio_ion.h>\n",
                          "audio calibration real allocator API"))
     cal = dest / "dsp/audio_calibration.c"
-    cal.write_text(one(cal.read_text(),
-                       "#include <linux/msm_ion.h>\n", "",
-                       "calibration legacy ion include"))
+    cal_src = one(cal.read_text(),
+                  "#include <linux/msm_ion.h>\n",
+                  "#include <linux/compat.h>\n",
+                  "calibration legacy ion include / compat_ptr declaration")
+    # Donor's CONFIG_COMPAT ioctl handler uses compat_ptr(), declared
+    # by linux/compat.h; the removed legacy ION header provided it
+    # transitively on 4.19. Keep the native kernel prototype.
+    if "compat_ptr(" not in cal_src:
+        raise RuntimeError("P472 A2 TG calibration compat ioctl changed")
+    cal.write_text(cal_src)
     ion = dest / "dsp/msm_audio_ion.c"
     src = ion.read_text()
     src = one(src, "#include <linux/ion_kernel.h>",
@@ -204,6 +211,9 @@ def stage(root, tg):
 def validate(root):
     dest = root / REL
     ion = (dest / "dsp/msm_audio_ion.c").read_text()
+    cal = (dest / "dsp/audio_calibration.c").read_text()
+    if cal.count("#include <linux/compat.h>") != 1 or "compat_ptr(" not in cal:
+        raise RuntimeError("P472 A2 calibration compat_ptr 5.10 declaration missing")
     mk = (dest / "dsp/Makefile").read_text()
     tests = {
         "real_native_dma_heap_allocator": "dma_heap_buffer_alloc(" in ion,
