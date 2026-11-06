@@ -99,10 +99,14 @@ def validate(root):
                      "#include <linux/msm_audio_calibration.h>"):
         if required not in cal_header:
             raise RuntimeError("P472 q6core cal header required: " + required)
-    for excluded in ("#include <linux/msm_ion.h>",
-                     "#include <dsp/msm_audio_ion.h>"):
-        if excluded in cal_header:
-            raise RuntimeError("P472 q6core compile-only header pulls legacy ION: " + excluded)
+    if "#include <linux/msm_ion.h>" in cal_header:
+        raise RuntimeError("P472 cal header includes unavailable legacy ION")
+    # A1 is compile-only; A2 additionally stages and LINKS a real
+    # DMA-BUF allocator implementation, so its public prototype may be
+    # included again only when the real implementation exists.
+    if "#include <dsp/msm_audio_ion.h>" in cal_header and not (
+        d/"dsp/msm_audio_ion.c").is_file():
+        raise RuntimeError("P472 cal header includes unimplemented allocator")
     dsp_make = (d/"dsp/Makefile").read_text()
     if "audio_pdr.o" in dsp_make or "audio_ssr.o audio_notifier.o" not in dsp_make:
         raise RuntimeError("P472 PDR no-arm gate or real SSR provider missing")
@@ -123,7 +127,9 @@ def validate(root):
         "audio_notifier":"real TG notifier implementation on P472 config",
         "snd_event":"real TG sound event implementation on P472 config",
         "audio_pdr":"off; PDR-only header and opcode paths guarded in staged copy",
-        "q6core":"compile-only; calibration types retained; legacy ION transitive header excluded; not linked",
+        "q6core":("native-link staged with real calibration and DMA-HEAP" if
+                  (d/"dsp/msm_audio_ion.c").exists() else
+                  "compile-only; legacy ION transitive header excluded"),
         "afe_asm_adm_msm_audio_ion":"not staged",
         "legacy_p472_private_api":"disabled in config",
         "no_arm":True,"flash_authorized":False}
