@@ -77,6 +77,10 @@ def validate(root):
         raise RuntimeError("P472 private RPMsg driver leaked into TG source")
     if "cal_utils_create_cal_types" not in q6 or "core_init(" not in q6:
         raise RuntimeError("TG q6core incomplete")
+    if q6.count("u32 msm_audio_populate_upper_32_bits(dma_addr_t pa);") != 1:
+        raise RuntimeError("P472 q6core must retain TG ION helper declaration only")
+    if "u32 msm_audio_populate_upper_32_bits(dma_addr_t pa) {" in q6:
+        raise RuntimeError("P472 q6core fake ION helper implementation forbidden")
     for rel in ("dsp/audio_ssr.h", "include/dsp/audio_notifier.h",
                 "include/soc/snd_event.h"):
         if "CONFIG_P472_TG_APR" not in (d/rel).read_text():
@@ -223,6 +227,23 @@ def main():
         if cal_text.count(old_headers) != 1:
             raise RuntimeError("P472 TG calibration header include closure changed")
         cal_header.write_text(cal_text.replace(old_headers, new_headers, 1))
+        # TG msm_audio_ion.h also declared this q6core dependency.
+        # Keep the exact prototype for an object-only compile without
+        # pulling in missing 4.19 ION internals or supplying a fake body.
+        # This symbol MUST be resolved from a real allocator before link.
+        ion_proto = "u32 msm_audio_populate_upper_32_bits(dma_addr_t pa);"
+        donor_ion_header = source/"include/dsp/msm_audio_ion.h"
+        if donor_ion_header.read_text().count(ion_proto) != 1:
+            raise RuntimeError("P472 TG donor ION prototype changed")
+        staged_core = dest/"dsp/q6core.c"
+        core_src = staged_core.read_text()
+        anchor = '#include "adsp_err.h"\\n'.replace("\\n", "\n")
+        if core_src.count(anchor) != 1 or ion_proto in core_src:
+            raise RuntimeError("P472 TG q6core prototype insertion site changed")
+        core_src = core_src.replace(
+            anchor, anchor + "\n/* Compile-only: implemented by real msm_audio_ion, not staged. */\n" + ion_proto + "\n", 1
+        )
+        staged_core.write_text(core_src)
         for path,content in MK.items(): (dest/path).write_text(content)
         k=a.root/"drivers/soc/qcom/Kconfig"
         m=a.root/"drivers/soc/qcom/Makefile"
