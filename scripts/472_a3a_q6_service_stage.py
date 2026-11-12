@@ -170,6 +170,21 @@ def stage(root, tg):
         if target.exists():
             raise RuntimeError("P472 A3a duplicate staging: " + srcname)
         shutil.copy2(source, target)
+
+    # TG q6adm uses the real msm_audio_ion allocator and high-address
+    # helper, but does not directly include their declaration header.
+    # A2a already stages the real 5.10-adapted ION header/provider.
+    # Add only the missing include, never a stub or alternate allocator.
+    adm = dest / "dsp/q6adm.c"
+    adm_source = adm.read_text()
+    if "#include <dsp/msm_audio_ion.h>" in adm_source:
+        raise RuntimeError("P472 A3a TG q6adm include provenance changed")
+    adm.write_text(one(
+        adm_source,
+        "#include <dsp/audio_cal_utils.h>\\n".replace("\\n", "\n"),
+        "#include <dsp/audio_cal_utils.h>\\n#include <dsp/msm_audio_ion.h>\\n".replace("\\n", "\n"),
+        "real A2a msm_audio_ion prototypes for q6adm",
+    ))
     for srcname in HELPERS:
         source = donor / "dsp" / srcname
         target = dest / "dsp" / srcname
@@ -217,6 +232,16 @@ def check(root):
     for item in required_objects:
         if item not in mk:
             raise RuntimeError("P472 A3a missing linked object "+item)
+    # q6adm must call the real, already-linked A2a ION implementation
+    # using TG's exact header prototypes, not undeclared externs.
+    adm = (d / "dsp/q6adm.c").read_text()
+    ion_header = (d / "include/dsp/msm_audio_ion.h").read_text()
+    if adm.count("#include <dsp/msm_audio_ion.h>") != 1:
+        raise RuntimeError("P472 A3a q6adm must include real ION prototypes")
+    for prototype in ("msm_audio_ion_alloc(", "msm_audio_ion_free(",
+                      "msm_audio_populate_upper_32_bits("):
+        if prototype not in ion_header or prototype not in adm:
+            raise RuntimeError("P472 A3a missing real ION API " + prototype)
     for service in ("adm", "afe", "asm", "lsm"):
         if f"P472 A3a Q6 {service} registered rc=0" not in init:
             raise RuntimeError("P472 A3a true service marker absent "+service)
