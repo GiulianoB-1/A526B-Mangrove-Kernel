@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P474 NORMAL/nohlt vs HLT boot paired with working P472 APR (NO ARM)
+run-name: P472 A2a-HLT native real-ION q6core/cal with P474 nohlt-free boot (NO ARM)
 on:
   push:
     branches:
@@ -41,6 +41,7 @@ on:
       - agent/p472-a1-tg-apr-trio-q6core-probe-no-arm
       - agent/p472-a1-tg-apr-drop256-sync-ci-no-arm
       - agent/p474-hlt-boot-pair-from-hw-apr-no-arm
+      - agent/p472-a2a-hlt-q6core-cal-ion-noheaps-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1744,6 +1745,14 @@ jobs:
           python3 scripts/474_idle_stage.py --root "$ROOT" \
             --report phase447-inventory/P474-IDLE-SOURCE.json
           python3 scripts/474_idle_stage.py --root "$ROOT" --check-only
+          test "$(git hash-object scripts/472_a2a_q6core_existing_ion.py)" = '23e26f9bbef6584775008fed3fef905cc5f54d9a' || {
+            echo "::error title=P472 A2a-HLT::staging source changed from prior A2a"; exit 1
+          }
+          python3 -m py_compile scripts/472_a2a_q6core_existing_ion.py
+          python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --report phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
+          python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1765,7 +1774,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --disable P472_TG_Q6CORE \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1786,10 +1795,25 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
+          for feature in CONFIG_P472_TG_Q6CORE=y CONFIG_ION=y CONFIG_ION_SYSTEM_HEAP=y; do
+            grep -Fxq "$feature" "$BUILD/.config" || {
+              echo "::error title=P472 A2a::required real ION/q6core not built in::$feature"; exit 1
+            }
+          done
+          # Only reject DMA-BUF HEAPS options truly enabled (y or m).
+          # The former regex matched =n due to an unrestricted '=' branch.
+          echo 'P472 A2a DMA-BUF HEAPS effective Kconfig:'
+          grep -E '^(CONFIG_DMABUF_HEAPS([_A-Z0-9]*)=|# CONFIG_DMABUF_HEAPS([_A-Z0-9]*) is not set)' "$BUILD/.config" || true
+          if grep -Eq '^CONFIG_DMABUF_HEAPS(_[A-Z0-9]+)?=[ym]$' "$BUILD/.config"; then
+            echo "::error title=P472 A2a::enabled DMA-BUF HEAPS forbidden"; exit 1
+          fi
+          grep -Fxq '# CONFIG_DMABUF_HEAPS is not set' "$BUILD/.config" || {
+            echo "::error title=P472 A2a::CONFIG_DMABUF_HEAPS must remain disabled"; exit 1
+          }
           grep -Fxq 'CONFIG_P472_TG_APR=y' "$BUILD/.config" || {
             echo "::error title=P472 TG APR Kconfig refused"; exit 1;
           }
-          for cfg in P472_A0_APR_Q6CORE P472_A1_APR_DISPATCH P472_TG_Q6CORE; do
+          for cfg in P472_A0_APR_Q6CORE P472_A1_APR_DISPATCH; do
             if grep -Eq "^CONFIG_${cfg}=[ym]$" "$BUILD/.config"; then
               echo "::error title=P472 conflicting APR provider::$cfg"; exit 1;
             fi
@@ -1921,13 +1945,15 @@ jobs:
             LLVM=1 LLVM_IAS=1 drivers/soc/qcom/p472_tg_audio/dsp/q6core.o
           test -s "$BUILD/drivers/soc/qcom/p472_tg_audio/dsp/q6core.o"
           # extra-y is compile-only. It must not add q6core to the linked Image.
-          if grep -Eq '[[:space:]]q6core_probe$' "$BUILD/System.map"; then
-            echo "::error title=P472::q6core linked without calibration/ION"; exit 1
-          fi
-          grep -Fxq '# CONFIG_P472_TG_Q6CORE is not set' "$BUILD/.config" || {
-            echo "::error title=P472::q6core must remain compile-only"; exit 1
-          }
-          echo 'P472 q6core object compiled via extra-y, not linked; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          for sym in core_init audio_cal_init cal_utils_create_cal_types msm_audio_ion_init msm_audio_ion_alloc msm_audio_populate_upper_32_bits ion_alloc ion_query_heaps_kernel; do
+            grep -Eq "[[:space:]]${sym}$" "$BUILD/System.map" || {
+              echo "::error title=P472 A2a::linked q6core/cal/ION symbol missing::$sym"; exit 1
+            }
+          done
+          grep -aFq 'P472 A2A TG Q6CORE_CAL_ION_LINKED real_ion=1 heaps=0' "$BUILD/arch/arm64/boot/Image"
+          grep -aFq 'P472 A2A ION_AUDIO_HEAP_MISSING fail_closed=1' "$BUILD/arch/arm64/boot/Image"
+          python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
+          echo 'P472 A2a TG q6core/cal linked against ACK 5.10 ION; CONFIG_DMABUF_HEAPS=n; keyboard/BT hardware gates pending; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
