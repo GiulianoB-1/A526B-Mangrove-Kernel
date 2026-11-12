@@ -228,7 +228,25 @@ def check(root):
                    "late_initcall_sync(p472_a3a_start)"):
         if marker not in init:
             raise RuntimeError("P472 A3a version/real-init gate missing "+marker)
-    if "q6_init.o" in mk:
+    # A comment in LINK intentionally describes why q6_init.c is excluded.
+    # Inspect real Kbuild assignments, not a raw substring in comments.
+    def linked_q6_init(makefile):
+        for line in makefile.splitlines():
+            line = line.partition("#")[0].strip()
+            if not line or not line.startswith(("obj-", "p472_")):
+                continue
+            if any(op in line for op in ("+=", ":=", "=")):
+                if "q6_init.o" in line.split():
+                    return True
+        return False
+
+    # Regression check: comments are documentation; an object assignment
+    # is a real duplicate-init risk and must still abort A3a.
+    if linked_q6_init("# original q6_init.o is excluded\n"):
+        raise RuntimeError("P472 A3a Kbuild audit rejects comment text")
+    if not linked_q6_init("obj-$(CONFIG_P472_A3A_Q6) += q6_init.o\n"):
+        raise RuntimeError("P472 A3a Kbuild audit missed a linked initializer")
+    if linked_q6_init(mk):
         raise RuntimeError("P472 A3a would double-init A2a q6core/cal/ION")
     if (d / "asoc/kona.c").exists():
         raise RuntimeError("P472 A3a must not register any ASoC machine card")
