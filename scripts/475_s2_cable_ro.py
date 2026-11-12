@@ -153,9 +153,6 @@ def stage(root,tg):
     s=once(s,"    mutex_init(&fg->a52h0_lock);",
            '    mutex_init(&fg->a52h0_lock);\n    fg->p475_s2_last_dt1=-999;\n    fg->p475_s2_last_type="INIT";',
            "initialize state")
-    s=once(s,'        a52h0_off(fg,"GUARD_IO",true);',
-           '        a52h0_off(fg,"GUARD_IO",true);',
-           "P449 preserve guard")
     # Sample inside the existing mutex-owned H0 tick, without altering
     # P449 guard-first worker, 2-second cadence or PM notifier structure.
     s=once(s,"    mutex_lock(&fg->a52h0_lock);\n    /* Track ten consecutive seconds of both real physical NTCs valid. */",
