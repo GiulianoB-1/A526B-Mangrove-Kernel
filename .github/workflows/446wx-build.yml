@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 A2a-HLT native real-ION q6core/cal with P474 nohlt-free boot (NO ARM)
+run-name: P476 H2 only + real S2 cable, A3 off, HLT from A2a (NO ARM)
 on:
   push:
     branches:
@@ -42,6 +42,8 @@ on:
       - agent/p472-a1-tg-apr-drop256-sync-ci-no-arm
       - agent/p474-hlt-boot-pair-from-hw-apr-no-arm
       - agent/p472-a2a-hlt-q6core-cal-ion-noheaps-no-arm
+      - agent/p476-a3-sndcard-s2-cable-h2-no-arm
+      - agent/p476-h2-only-a2a-hlt-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -338,6 +340,24 @@ jobs:
             python3 scripts/463_guard_suspend_safe.py --root "$ROOT" --check-only
             python3 scripts/452_h01_safety_gate.py --root "$ROOT" \
               --report phase447-inventory/P452-H01-SOURCE-SAFETY.json
+            # P475 S2 and P476 H2 are independently gated source ports.
+            # Stage AFTER the unchanged H0/H0.1/P449 source safety check.
+            python3 -m py_compile scripts/475_s2_cable_ro.py scripts/476_h2_manual_1000.py
+            python3 scripts/475_s2_cable_ro.py --root "$ROOT" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P475-S2-CABLE-SOURCE.json
+            python3 scripts/475_s2_cable_ro.py --root "$ROOT" --check-only
+            python3 scripts/476_h2_manual_1000.py --root "$ROOT" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P476-H2-SOURCE.json
+            python3 scripts/476_h2_manual_1000.py --root "$ROOT" --check-only
+            # Both Kconfig options default n. This diagnostic build links
+            # their code, while H2 runtime sysfs manual arm defaults 0.
+            "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
+              --enable P475_S2_CABLE --enable P476_H2
+            make -C "$ROOT" O="$PWD/workspace/gki-phase199-out" ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+              LLVM=1 LLVM_IAS=1 olddefconfig
             echo 'P464 same G source: P463 guard PM notifier/freezable worker active before P461 FastRPC generation' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
@@ -730,6 +750,14 @@ jobs:
             verify_g_marker 'P452 H0 STOP reason='
             verify_g_marker 'P452 H0.1 VERIFY_FAIL rc='
             verify_g_marker 'P452 H0.1 VERIFY_IO streak='
+            for feature in CONFIG_P475_S2_CABLE=y CONFIG_P476_H2=y; do
+              grep -Fxq "$feature" "$BUILD/.config" || {
+                echo "::error title=P476::S2/H2 Kconfig gate not built-in::$feature"; exit 1
+              }
+            done
+            verify_g_marker 'P475 S2 CABLE type=%s'
+            verify_g_marker 'P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s'
+            verify_g_marker 'P476 H2 OFF reason=%s'
             verify_g_marker 'P452 SCM PROBED native_5_10=1 dload_default='
             # Kbuild: ufs-qcom-ice.o needs BOTH the Qualcomm UFS host
             # and inline crypto. The source safety audit runs in all cases.
@@ -1753,6 +1781,7 @@ jobs:
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
+          # Charger-only H2: A3 disabled, so no A3 source audit.
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1774,7 +1803,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --disable P472_A3_SOUND_CARD --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1953,7 +1982,17 @@ jobs:
           grep -aFq 'P472 A2A TG Q6CORE_CAL_ION_LINKED real_ion=1 heaps=0' "$BUILD/arch/arm64/boot/Image"
           grep -aFq 'P472 A2A ION_AUDIO_HEAP_MISSING fail_closed=1' "$BUILD/arch/arm64/boot/Image"
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
-          echo 'P472 A2a TG q6core/cal linked against ACK 5.10 ION; CONFIG_DMABUF_HEAPS=n; keyboard/BT hardware gates pending; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/475_s2_cable_ro.py --root "$ROOT" --check-only
+          python3 scripts/476_h2_manual_1000.py --root "$ROOT" --check-only
+          # The actual A3 audit must run only if A3 is enabled.
+          # This H2-only branch refuses A3 instead of fabricating a sound card.
+          if grep -Eq '^CONFIG_P472_A3_SOUND_CARD=[ym]$' "$BUILD/.config"; then
+            echo "::error title=P476 H2-only::A3 enabled unexpectedly; require full A3 source/link audit"; exit 1
+          fi
+          grep -aFq 'P475 S2 CABLE type=%s' "$BUILD/arch/arm64/boot/Image"
+          grep -aFq 'P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s' "$BUILD/arch/arm64/boot/Image"
+          grep -aFq 'P476 H2 OFF reason=%s' "$BUILD/arch/arm64/boot/Image"
+          echo 'P476 H2-only real S2/H2 linked; A3 off; manual sysfs OFF default; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
@@ -2081,20 +2120,20 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
+            --output phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
+            --candidate phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
           python3 scripts/474_hlt_pair.py \
-            --normal phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
-            --hlt phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img \
+            --normal phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
+            --hlt phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --report phase447-inventory/P474-CMDLINE-PAIR.json
-          python3 - <<'P472_A2A_HLT_GATE'
+          python3 - <<'P476_HLT_GATE'
           import json
           from pathlib import Path
           r = json.loads(Path("phase447-inventory/P474-CMDLINE-PAIR.json").read_text())
@@ -2104,22 +2143,22 @@ jobs:
                   or "nohlt" in r.get("hlt_cmdline", "").split()
                   or not r.get("invariants")
                   or not all(r["invariants"].values())):
-              raise SystemExit("P472 A2a-HLT: nohlt must be absent and every pair invariant must PASS")
-          print("P472 A2a-HLT BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
-          P472_A2A_HLT_GATE
-          echo 'P472 A2a-HLT only image for testing has nohlt=0; NORMAL intermediate must not be flashed.' >> "$GITHUB_STEP_SUMMARY"
+              raise SystemExit("P476: nohlt must be absent and every pair invariant must PASS")
+          print("P476 BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
+          P476_HLT_GATE
+          echo 'P476 H2-only one HLT image: real S2/H2, A3 off, nohlt=0; NORMAL internal only.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P472-A2A-HLT-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P476-H2-ONLY-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img
-          } > phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img
+          } > phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2139,13 +2178,16 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P472-A2A-HLT-ACK-ION-NOHEAPS-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P476-H2-ONLY-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img
             phase447-inventory/P474-CMDLINE-PAIR.json
             phase447-inventory/P474-IDLE-SOURCE.json
             phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
             docs/p472-a2a-hlt-firstboot-test.md
+            docs/p476-h2-only-firstboot-test.md
+            phase447-inventory/P475-S2-CABLE-SOURCE.json
+            phase447-inventory/P476-H2-SOURCE.json
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
@@ -2156,7 +2198,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2206,7 +2248,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
