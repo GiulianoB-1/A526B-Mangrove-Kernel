@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P472 A2a-HLT native real-ION q6core/cal with P474 nohlt-free boot (NO ARM)
+run-name: P476 A3 soundcard + P475 S2 cable + P476 H2 manual OFF, HLT-only (NO ARM)
 on:
   push:
     branches:
@@ -42,6 +42,7 @@ on:
       - agent/p472-a1-tg-apr-drop256-sync-ci-no-arm
       - agent/p474-hlt-boot-pair-from-hw-apr-no-arm
       - agent/p472-a2a-hlt-q6core-cal-ion-noheaps-no-arm
+      - agent/p476-a3-sndcard-s2-cable-h2-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -338,6 +339,24 @@ jobs:
             python3 scripts/463_guard_suspend_safe.py --root "$ROOT" --check-only
             python3 scripts/452_h01_safety_gate.py --root "$ROOT" \
               --report phase447-inventory/P452-H01-SOURCE-SAFETY.json
+            # P475 S2 and P476 H2 are independently gated source ports.
+            # Stage AFTER the unchanged H0/H0.1/P449 source safety check.
+            python3 -m py_compile scripts/475_s2_cable_ro.py scripts/476_h2_manual_1000.py
+            python3 scripts/475_s2_cable_ro.py --root "$ROOT" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P475-S2-CABLE-SOURCE.json
+            python3 scripts/475_s2_cable_ro.py --root "$ROOT" --check-only
+            python3 scripts/476_h2_manual_1000.py --root "$ROOT" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P476-H2-SOURCE.json
+            python3 scripts/476_h2_manual_1000.py --root "$ROOT" --check-only
+            # Both Kconfig options default n. This diagnostic build links
+            # their code, while H2 runtime sysfs manual arm defaults 0.
+            "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
+              --enable P475_S2_CABLE --enable P476_H2
+            make -C "$ROOT" O="$PWD/workspace/gki-phase199-out" ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+              LLVM=1 LLVM_IAS=1 olddefconfig
             echo 'P464 same G source: P463 guard PM notifier/freezable worker active before P461 FastRPC generation' >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ matrix.variant.id }}" = G ]; then
