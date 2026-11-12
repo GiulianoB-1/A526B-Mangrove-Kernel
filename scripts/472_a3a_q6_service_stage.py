@@ -210,9 +210,11 @@ def check(root):
             raise RuntimeError("P472 A3a missing donor "+s)
     if k.count("config P472_A3A_Q6") != 1 or "default n" not in k.split("config P472_A3A_Q6")[1].split("config ")[0]:
         raise RuntimeError("P472 A3a must have independent default-OFF Kconfig")
-    for item in needed := ("q6audio-v2.o", "q6common.o", "q6adm.o", "q6afe.o",
-                           "q6asm.o", "q6lsm.o", "q6voice.o", "rtac.o",
-                           "msm-audio-event-notify.o", "avtimer.o", "p472_a3a_q6_init.o"):
+    required_objects = ("q6audio-v2.o", "q6common.o", "q6adm.o", "q6afe.o",
+                        "q6asm.o", "q6lsm.o", "q6voice.o", "rtac.o",
+                        "msm-audio-event-notify.o", "avtimer.o",
+                        "p472_a3a_q6_init.o")
+    for item in required_objects:
         if item not in mk:
             raise RuntimeError("P472 A3a missing linked object "+item)
     for service in ("adm", "afe", "asm", "lsm"):
