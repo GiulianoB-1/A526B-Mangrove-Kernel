@@ -749,6 +749,14 @@ jobs:
             verify_g_marker 'P452 H0 STOP reason='
             verify_g_marker 'P452 H0.1 VERIFY_FAIL rc='
             verify_g_marker 'P452 H0.1 VERIFY_IO streak='
+            for feature in CONFIG_P475_S2_CABLE=y CONFIG_P476_H2=y; do
+              grep -Fxq "$feature" "$BUILD/.config" || {
+                echo "::error title=P476::S2/H2 Kconfig gate not built-in::$feature"; exit 1
+              }
+            done
+            verify_g_marker 'P475 S2 CABLE type=%s'
+            verify_g_marker 'P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s'
+            verify_g_marker 'P476 H2 OFF reason=%s'
             verify_g_marker 'P452 SCM PROBED native_5_10=1 dload_default='
             # Kbuild: ufs-qcom-ice.o needs BOTH the Qualcomm UFS host
             # and inline crypto. The source safety audit runs in all cases.
@@ -1772,6 +1780,13 @@ jobs:
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
+          # Actual A3 donor/API audit; never manufacture a registration.
+          python3 -m py_compile scripts/476_a3_soundcard_audit.py
+          python3 scripts/476_a3_soundcard_audit.py \
+            --root "$ROOT" --tg "$PWD/workspace/touchgrass-a52xq" \
+            --report phase447-inventory/P472-A3-SNDCARD-SOURCE.json
+          python3 scripts/476_a3_soundcard_audit.py \
+            --root "$ROOT" --tg "$PWD/workspace/touchgrass-a52xq" --check-only
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1793,7 +1808,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --enable P472_A3_SOUND_CARD --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1814,7 +1829,7 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
-          for feature in CONFIG_P472_TG_Q6CORE=y CONFIG_ION=y CONFIG_ION_SYSTEM_HEAP=y; do
+          for feature in CONFIG_P472_TG_Q6CORE=y CONFIG_P472_A3_SOUND_CARD=y CONFIG_ION=y CONFIG_ION_SYSTEM_HEAP=y; do
             grep -Fxq "$feature" "$BUILD/.config" || {
               echo "::error title=P472 A2a::required real ION/q6core not built in::$feature"; exit 1
             }
@@ -1972,7 +1987,17 @@ jobs:
           grep -aFq 'P472 A2A TG Q6CORE_CAL_ION_LINKED real_ion=1 heaps=0' "$BUILD/arch/arm64/boot/Image"
           grep -aFq 'P472 A2A ION_AUDIO_HEAP_MISSING fail_closed=1' "$BUILD/arch/arm64/boot/Image"
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
-          echo 'P472 A2a TG q6core/cal linked against ACK 5.10 ION; CONFIG_DMABUF_HEAPS=n; keyboard/BT hardware gates pending; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/475_s2_cable_ro.py --root "$ROOT" --check-only
+          python3 scripts/476_h2_manual_1000.py --root "$ROOT" --check-only
+          # A3 is a hard fail-close until the actual 5.10 ASoC card ports.
+          python3 scripts/476_a3_soundcard_audit.py \
+            --root "$ROOT" --tg "$PWD/workspace/touchgrass-a52xq" \
+            --check-only --require-linked \
+            --system-map "$BUILD/System.map" --image "$BUILD/arch/arm64/boot/Image"
+          grep -aFq 'P472 A3 Q6 afe/asm/adm/lsm up' "$BUILD/arch/arm64/boot/Image" || {
+            echo "::error title=P472 A3::actual Q6 readiness marker not linked"; exit 1
+          }
+          echo 'P476: real A3/S2/H2 linked, H2 sysfs OFF, NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
                         'P473 B1 WRAPPER synthetic=1' \
