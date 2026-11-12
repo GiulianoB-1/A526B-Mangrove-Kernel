@@ -42,6 +42,9 @@ static int p476_h2_off(struct a52d_fg *fg, const char *reason)
 	int current, rc=0;
 	bool was_on=fg->p476_h2_fast || fg->p476_h2_enabled;
 
+	/* Absolutely no extra I2C reads/writes on the H0-only default. */
+	if (!was_on)
+		return 0;
 	current=a52h0_regread(fg,A52H0_CHGCNTL2);
 	if (fg->p476_h2_fast || current==P476_H2_1000MA_CODE) {
 		rc=a52h0_write_masked(fg,A52H0_CHGCNTL2,0xff,
@@ -235,7 +238,8 @@ static void a52h0_off(struct a52d_fg *fg,const char *why,bool permanent)""",
     int rc=0;
 #if IS_ENABLED(CONFIG_P476_H2)
     /* Return to 500 mA BEFORE any existing H0 disable/stop path. */
-    if(p476_h2_off(fg,why))
+    if((fg->p476_h2_fast || fg->p476_h2_enabled) &&
+       p476_h2_off(fg,why))
         permanent=true;
 #endif""",
            "all H0 OFF paths safely demote 500mA")
