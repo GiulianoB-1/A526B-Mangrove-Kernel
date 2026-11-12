@@ -39,14 +39,14 @@ static const char *p475_s2_type(struct a52d_fg *fg, int *dt1);
 /* Locking: a52h0_lock is held by all callers, including H0 OFF paths. */
 static int p476_h2_off(struct a52d_fg *fg, const char *reason)
 {
-	int current, rc=0;
+	int charge_reg, rc=0;
 	bool was_on=fg->p476_h2_fast || fg->p476_h2_enabled;
 
 	/* Absolutely no extra I2C reads/writes on the H0-only default. */
 	if (!was_on)
 		return 0;
-	current=a52h0_regread(fg,A52H0_CHGCNTL2);
-	if (fg->p476_h2_fast || current==P476_H2_1000MA_CODE) {
+	charge_reg=a52h0_regread(fg,A52H0_CHGCNTL2);
+	if (fg->p476_h2_fast || charge_reg==P476_H2_1000MA_CODE) {
 		rc=a52h0_write_masked(fg,A52H0_CHGCNTL2,0xff,
 				      A52H0_CHG_FAST_500MA);
 		if (rc) {
@@ -300,6 +300,11 @@ def check(root):
         if forbidden in h2:raise RuntimeError("H2 forbidden new write/side effect "+forbidden)
     if s.count("P476 H2 ON cur=1000")!=1:
         raise RuntimeError("H2 marker duplication")
+    # ARM64 defines current as get_current(); never use it as a C local.
+    if "\tint charge_reg, rc=0;" not in h2 or "charge_reg==P476_H2_1000MA_CODE" not in h2:
+        raise RuntimeError("H2 CHGCNTL2 readback variable missing")
+    if "\tint current," in h2 or "\tcurrent=" in h2:
+        raise RuntimeError("H2 ARM64 current macro identifier collision")
     print("P476 H2 SOURCE PASS: manual OFF; real H0 gated 1000mA; 39C/45C to 500; no prohibited register writes")
 
 def main():
