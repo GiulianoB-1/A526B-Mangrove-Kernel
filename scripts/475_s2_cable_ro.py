@@ -147,18 +147,20 @@ def stage(root,tg):
     s=once(s,"struct delayed_work a52g_guard_work;",
            "struct delayed_work a52g_guard_work;\n    int p475_s2_last_dt1;\n    const char *p475_s2_last_type;",
            "state fields")
-    s=once(s,"static void a52g_poll(struct work_struct *work)",
-           C+"\nstatic void a52g_poll(struct work_struct *work)",
-           "after H0 read-only source")
+    s=once(s,"static void a52h0_tick(struct a52d_fg *fg)",
+           C+"\nstatic void a52h0_tick(struct a52d_fg *fg)",
+           "read-only source before H0 tick")
     s=once(s,"    mutex_init(&fg->a52h0_lock);",
            '    mutex_init(&fg->a52h0_lock);\n    fg->p475_s2_last_dt1=-999;\n    fg->p475_s2_last_type="INIT";',
            "initialize state")
     s=once(s,'        a52h0_off(fg,"GUARD_IO",true);',
            '        a52h0_off(fg,"GUARD_IO",true);',
            "P449 preserve guard")
-    s=once(s,"    } else a52h0_tick(fg);",
-           "    } else {\n        p475_s2_log(fg);\n        a52h0_tick(fg);\n    }",
-           "guard-first cable sample")
+    # Sample inside the existing mutex-owned H0 tick, without altering
+    # P449 guard-first worker, 2-second cadence or PM notifier structure.
+    s=once(s,"    mutex_lock(&fg->a52h0_lock);\n    /* Track ten consecutive seconds of both real physical NTCs valid. */",
+           "    mutex_lock(&fg->a52h0_lock);\n    p475_s2_log(fg);\n    /* Track ten consecutive seconds of both real physical NTCs valid. */",
+           "H0 tick read-only MUIC sampling")
     s=once(s,'    if(fg->a52h0_killed)\n        dev_warn(fg->dev,"P452 H0 FAULT_LATCHED init; no arm, P449 guard scheduled\\n");',
            '    if(fg->a52h0_killed)\n        dev_warn(fg->dev,"P452 H0 FAULT_LATCHED init; no arm, P449 guard scheduled\\n");\n    p475_s2_setup(fg);',
            "read-only sysfs registration")
