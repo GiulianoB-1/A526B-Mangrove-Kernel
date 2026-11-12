@@ -2081,32 +2081,45 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+            --output phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+            --candidate phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
           python3 scripts/474_hlt_pair.py \
-            --normal phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
-            --hlt phase447b-variants/MANGROVE-P474-HLT-NO-ARM.boot.img \
+            --normal phase447-inventory/P472-A2A-HLT-INTERNAL-NOHLT1.boot.img \
+            --hlt phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --report phase447-inventory/P474-CMDLINE-PAIR.json
-          echo 'P474 paired boots verified: only nohlt removal changes cmdline; native Image and other boot parts identical.' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'P472_A2A_HLT_GATE'
+          import json
+          from pathlib import Path
+          r = json.loads(Path("phase447-inventory/P474-CMDLINE-PAIR.json").read_text())
+          if (r.get("status") != "CMDLINE_ONLY_PEER_VERIFIED"
+                  or r.get("hlt_nohlt") != 0
+                  or r.get("normal_nohlt") != 1
+                  or "nohlt" in r.get("hlt_cmdline", "").split()
+                  or not r.get("invariants")
+                  or not all(r["invariants"].values())):
+              raise SystemExit("P472 A2a-HLT: nohlt must be absent and every pair invariant must PASS")
+          print("P472 A2a-HLT BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
+          P472_A2A_HLT_GATE
+          echo 'P472 A2a-HLT only image for testing has nohlt=0; NORMAL intermediate must not be flashed.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P472-A1-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P472-A2A-HLT-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
-          } > phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img
+          } > phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2126,12 +2139,13 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P474-APR-HLT-PAIR-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P472-A2A-HLT-ACK-ION-NOHEAPS-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P472-A1-TG-APR-Q6CORE-PROBE-NO-ARM.boot.img
-            phase447b-variants/MANGROVE-P474-HLT-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P472-A2A-HLT-Q6CORE-CAL-ION-NOHEAPS-NO-ARM.boot.img
             phase447-inventory/P474-CMDLINE-PAIR.json
             phase447-inventory/P474-IDLE-SOURCE.json
+            phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
+            docs/p472-a2a-hlt-firstboot-test.md
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
@@ -2142,7 +2156,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2192,7 +2206,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P472-A1-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A2A-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
