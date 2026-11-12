@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P476 H2 only + real S2 cable, A3 off, HLT from A2a (NO ARM)
+run-name: P472 A3a real TG Q6 services + H2 HLT parent (NO ASoC, NO ARM)
 on:
   push:
     branches:
@@ -44,6 +44,7 @@ on:
       - agent/p472-a2a-hlt-q6core-cal-ion-noheaps-no-arm
       - agent/p476-a3-sndcard-s2-cable-h2-no-arm
       - agent/p476-h2-only-a2a-hlt-no-arm
+      - agent/p472-a3a-q6-services-from-p476-h2-hlt-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -1781,7 +1782,13 @@ jobs:
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
-          # Charger-only H2: A3 disabled, so no A3 source audit.
+          # Genuine A3a Q6 stage only, never call original TG q6_init
+          # which would reinitialize A2a q6core/calibration/ION.
+          python3 -m py_compile scripts/472_a3a_q6_service_stage.py
+          python3 scripts/472_a3a_q6_service_stage.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --report phase447-inventory/P472-A3A-Q6-SOURCE.json
+          python3 scripts/472_a3a_q6_service_stage.py --root "$ROOT" --check-only
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -1803,7 +1810,7 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/p473-p471-unchanged.sha256"
           "$ROOT/scripts/config" --file "$BUILD/.config" \
             --enable IPA_CLIENTS_MANAGER --enable RNDIS_IPA \
-            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --disable P472_A3_SOUND_CARD --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
+            --disable RMNET --enable P471_RMNET_CORE --enable P471_RMNET_CTL --disable P472_A0_APR_Q6CORE --disable P472_A1_APR_DISPATCH --enable P472_TG_APR --enable P472_TG_Q6CORE --disable P472_A3_SOUND_CARD --enable P472_A3A_Q6 --enable ION --enable ION_SYSTEM_HEAP --disable DMABUF_HEAPS --disable DMABUF_HEAPS_SYSTEM \
             --enable SERIAL_QCOM_GENI --enable P473_TG_BTPOWER
           make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -1824,7 +1831,7 @@ jobs:
             echo "::error title=P471::ACK rmnet must not also register rtnl kind=rmnet"
             exit 1
           fi
-          for feature in CONFIG_P472_TG_Q6CORE=y CONFIG_ION=y CONFIG_ION_SYSTEM_HEAP=y; do
+          for feature in CONFIG_P472_TG_Q6CORE=y CONFIG_P472_A3A_Q6=y CONFIG_ION=y CONFIG_ION_SYSTEM_HEAP=y; do
             grep -Fxq "$feature" "$BUILD/.config" || {
               echo "::error title=P472 A2a::required real ION/q6core not built in::$feature"; exit 1
             }
@@ -1984,6 +1991,22 @@ jobs:
           python3 scripts/472_a2a_q6core_existing_ion.py --root "$ROOT" --check-only
           python3 scripts/475_s2_cable_ro.py --root "$ROOT" --check-only
           python3 scripts/476_h2_manual_1000.py --root "$ROOT" --check-only
+          python3 scripts/472_a3a_q6_service_stage.py --root "$ROOT" --check-only
+          for sym in afe_init q6asm_init adm_init q6lsm_init q6common_pack_pp_params q6core_get_avcs_api_version_per_service; do
+            grep -Eq "[[:space:]]$sym$" "$BUILD/System.map" || {
+              echo "::error title=P472 A3a::native Q6 service symbol absent::$sym"; exit 1
+            }
+          done
+          for marker in 'P472 A3a Q6 afe registered rc=0' \
+                        'P472 A3a Q6 asm registered rc=0' \
+                        'P472 A3a Q6 adm registered rc=0' \
+                        'P472 A3a Q6 lsm registered rc=0' \
+                        'P472 A3a Q6 ADSP_VERSION_REPLY afe=%d asm=%d adm=%d' \
+                        'P472 A3a Q6 VERSION_FAIL'; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P472 A3a::linked image missing real source marker::$marker"; exit 1
+            }
+          done
           # The actual A3 audit must run only if A3 is enabled.
           # This H2-only branch refuses A3 instead of fabricating a sound card.
           if grep -Eq '^CONFIG_P472_A3_SOUND_CARD=[ym]$' "$BUILD/.config"; then
@@ -2120,17 +2143,17 @@ jobs:
           python3 scripts/38_repack_a52_p1_boot.py \
             --source "$ORIGINAL_BOOT" \
             --kernel phase447-inventory/P470-A6-IPA-Image.gz \
-            --output phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
+            --output phase447-inventory/P472-A3A-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
             --report phase447-inventory/P470-A6-BOOTV2-REPACK.json
           python3 scripts/470_a6_candidate_gate.py \
             --baseline "$ORIGINAL_BOOT" \
-            --candidate phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
+            --candidate phase447-inventory/P472-A3A-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --config "$BUILD/.config" --system-map "$BUILD/System.map" \
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
           python3 scripts/474_hlt_pair.py \
-            --normal phase447-inventory/P476-H2-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
-            --hlt phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img \
+            --normal phase447-inventory/P472-A3A-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
+            --hlt phase447b-variants/MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --report phase447-inventory/P474-CMDLINE-PAIR.json
           python3 - <<'P476_HLT_GATE'
@@ -2152,13 +2175,13 @@ jobs:
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P476-H2-ONLY-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P472-A3A-Q6-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img
-          } > phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM.boot.img
+          } > phase447-inventory/P472-A3A-Q6-HLT-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2178,9 +2201,9 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P476-H2-ONLY-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P476-H2-1000MA-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM.boot.img
             phase447-inventory/P474-CMDLINE-PAIR.json
             phase447-inventory/P474-IDLE-SOURCE.json
             phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
@@ -2188,6 +2211,9 @@ jobs:
             docs/p476-h2-only-firstboot-test.md
             phase447-inventory/P475-S2-CABLE-SOURCE.json
             phase447-inventory/P476-H2-SOURCE.json
+            phase447-inventory/P472-A3A-Q6-SOURCE.json
+            docs/p472-a3a-q6-firstboot-test.md
+            docs/p472-a3a-a3c-q6-kbuild-and-kona-5_4-donor-audit.md
             phase447-inventory/P470-A6-BOOTV2-REPACK.json
             phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
             phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
@@ -2198,7 +2224,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A3A-Q6-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2248,7 +2274,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P476-H2-ONLY-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A3A-Q6-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
