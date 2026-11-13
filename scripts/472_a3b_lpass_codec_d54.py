@@ -107,7 +107,7 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1 -DCONFIG_MSM_CDC_PINCTRL=1
 subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MACRO=1 -DCONFIG_TX_MACRO=1 -DCONFIG_VA_MACRO=1
-subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1 -DCONFIG_SND_SOC_WCD_MBHC=1
+subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1 -DCONFIG_SND_SOC_WCD_MBHC=1 -DCONFIG_WCD9XXX_CODEC_CORE=1
 obj-y += soc/ asoc/
 '''
 
@@ -365,6 +365,8 @@ def stage(root,tg,d54):
         "include/soc/qcom/pm.h",
         "include/dt-bindings/sound/audio-codec-port-types.h",
         "include/linux/soc/qcom/fsa4480-i2c.h",
+        "include/sound/wcd-dsp-mgr.h",
+        "include/soc/qcom/ramdump.h",
     )
     for rel in extra_headers:
         source=d54/rel
@@ -421,6 +423,8 @@ def check(root):
     for rel in ("include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
                 "include/dt-bindings/sound/audio-codec-port-types.h",
                 "include/linux/soc/qcom/fsa4480-i2c.h",
+                "include/sound/wcd-dsp-mgr.h",
+                "include/soc/qcom/ramdump.h",
                 "include/soc/qcom/pm.h"):
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b pinned external header absent: "+rel)
@@ -523,6 +527,33 @@ def check(root):
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
+    # The pinned 5.4 WCD DSP manager public header is outside
+    # techpack/audio. Select actual function declarations, never its
+    # CONFIG_WCD9XXX_CODEC_CORE fallback that falsely returns success.
+    wdsp_h=(target/"include/sound/wcd-dsp-mgr.h").read_text()
+    wdsp_c=(target/"asoc/codecs/wcd-dsp-mgr.c").read_text()
+    wdsp_soc=(target/"asoc/codecs/wcd9xxx-soc-init.c").read_text()
+    ramdump_h=(target/"include/soc/qcom/ramdump.h").read_text()
+    b3_wdsp=[line for line in target_make.splitlines()
+             if line.startswith("subdir-ccflags-$(CONFIG_P472_A3B_B3) +=")]
+    if (len(b3_wdsp)!=1 or
+        b3_wdsp[0].split().count("-DCONFIG_WCD9XXX_CODEC_CORE=1")!=1):
+        raise RuntimeError("P472 A3b real WCD DSP manager config absent")
+    for expected,content in (
+        ("#ifdef CONFIG_WCD9XXX_CODEC_CORE",wdsp_h),
+        ("int wcd_dsp_mgr_init(void)",wdsp_h),
+        ("int wcd_dsp_mgr_init(void)",wdsp_c),
+        ("void wcd_dsp_mgr_exit(void)",wdsp_c),
+        ("#include <sound/wcd-dsp-mgr.h>",wdsp_soc),
+        ("#include <soc/qcom/ramdump.h>",wdsp_c),
+        ("extern int do_ramdump(",ramdump_h),
+        ("extern void *create_ramdump_device(",ramdump_h),
+    ):
+        if content.count(expected)!=1:
+            raise RuntimeError("P472 A3b original WCD DSP/ramdump ABI drift: "+expected)
+    if ("wcd-dsp-mgr.o" not in (target/"asoc/codecs/Makefile").read_text() or
+        "wcd9xxx-soc-init.o" not in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P472 A3b WCD DSP manager objects missing")
     # The donor's wcd-mbhc-v2-api.h otherwise supplies inline
     # no-op/false-success MBHC functions that collide with the real
     # wcd-mbhc-v2.c implementation. B3 must select real prototypes.
