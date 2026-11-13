@@ -107,7 +107,7 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1 -DCONFIG_MSM_CDC_PINCTRL=1
 subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MACRO=1 -DCONFIG_TX_MACRO=1 -DCONFIG_VA_MACRO=1
-subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1
+subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1 -DCONFIG_SND_SOC_WCD_MBHC=1
 obj-y += soc/ asoc/
 '''
 
@@ -523,6 +523,24 @@ def check(root):
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
+    # The donor's wcd-mbhc-v2-api.h otherwise supplies inline
+    # no-op/false-success MBHC functions that collide with the real
+    # wcd-mbhc-v2.c implementation. B3 must select real prototypes.
+    mbhc_api=(target/"include/asoc/wcd-mbhc-v2-api.h").read_text()
+    b3_api_flags=[line for line in target_make.splitlines()
+                  if line.startswith("subdir-ccflags-$(CONFIG_P472_A3B_B3) +=")]
+    if (len(b3_api_flags)!=1 or
+        b3_api_flags[0].split().count("-DCONFIG_SND_SOC_WCD_MBHC=1")!=1 or
+        mbhc_api.count("#if IS_ENABLED(CONFIG_SND_SOC_WCD_MBHC)")!=1):
+        raise RuntimeError("P472 A3b real WCD MBHC API selection missing")
+    mbhc_impl=(target/"asoc/codecs/wcd-mbhc-v2.c").read_text()
+    for token in ("int wcd_mbhc_start(", "void wcd_mbhc_stop(",
+                  "int wcd_mbhc_init(", "int wcd_mbhc_get_impedance(",
+                  "void wcd_mbhc_deinit("):
+        if mbhc_impl.count(token)!=1:
+            raise RuntimeError("P472 A3b real WCD MBHC implementation drift: "+token)
+    if "wcd-mbhc-v2.o" not in (target/"asoc/codecs/Makefile").read_text():
+        raise RuntimeError("P472 A3b real WCD MBHC object missing")
     # The MBHC macro must use the genuine ACK 5.10 ASoC register
     # access, and its ADC initializer must resolve to the real object.
     mbhc_shared=(target/"include/asoc/wcd-mbhc-v2.h").read_text()
