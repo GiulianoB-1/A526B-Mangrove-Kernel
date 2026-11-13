@@ -101,6 +101,7 @@ config P472_A3B_B3
 '''
 ROOT_MAKE = '''# P472_A3B_LPASS_CODEC_REAL_D54_V1
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include
+subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi/audio
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
@@ -352,6 +353,20 @@ def check(root):
     if (pm.count("msm_cpuidle_get_deep_idle_latency(void)") != 2 or
             "#include <linux/cpuidle.h>" not in pm):
         raise RuntimeError("P472 A3b real 5.4 SoundWire PM/QoS header drift")
+    # WCD938x -> asoc/wcdcal-hwdep.h:7 imports the donor-owned
+    # <audio/sound/msmcal-hwdep.h>. It is at include/uapi/audio/sound/
+    # and therefore needs -I.../a3b/include/uapi (not just /uapi/audio).
+    hwdep=target/"include/uapi/audio/sound/msmcal-hwdep.h"
+    if not hwdep.is_file():
+        raise RuntimeError("P472 A3b pinned msmcal-hwdep UAPI header absent")
+    hwdep_user=target/"include/asoc/wcdcal-hwdep.h"
+    if (not hwdep_user.is_file() or
+        hwdep_user.read_text().count("#include <audio/sound/msmcal-hwdep.h>") != 1):
+        raise RuntimeError("P472 A3b WCD938x hwdep header/source ABI drift")
+    target_make=(target/"Makefile").read_text()
+    if (target_make.count("a3b/include/uapi\\n") != 1 or
+        target_make.count("a3b/include/uapi/audio\\n") != 1):
+        raise RuntimeError("P472 A3b UAPI include roots not unique")
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
