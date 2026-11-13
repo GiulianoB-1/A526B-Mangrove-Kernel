@@ -2042,6 +2042,9 @@ jobs:
           python3 scripts/477_h3_dcp_stepped.py --root "$ROOT" --check-only
           python3 scripts/477_mgbatt_shadow_stage.py --root "$ROOT" --check-only
           python3 scripts/472_a3b_lpass_codec_d54.py --root "$ROOT" --check-only
+          grep -Fxq 'CONFIG_SECURITY_SELINUX=y' "$BUILD/.config" || {
+            echo "::error title=P477::SELinux must be enabled/enforcing-capable"; exit 1
+          }
           for marker in 'P476 H2 ARM_REFUSED state=%s active=%d armed=%d killed=%d latch=%d' \
                         'P477 H3 SET ma=%d code=0x%02x vbuscntl=0x44 type=DCP bat=%d chg=%d' \
                         'P477 H3 LIMIT ma=%d reason=%s' \
@@ -2207,6 +2210,8 @@ jobs:
                   or r.get("hlt_nohlt") != 0
                   or r.get("normal_nohlt") != 1
                   or any(t == "nohlt" or t.startswith("nohlt=") for t in r.get("hlt_cmdline", "").split())
+                  or any(t in ("androidboot.selinux=permissive", "selinux=0",
+                               "enforcing=0") for t in r.get("hlt_cmdline", "").split())
                   or not r.get("invariants")
                   or not all(r["invariants"].values())):
               raise SystemExit("P476: nohlt must be absent and every pair invariant must PASS")
@@ -2261,6 +2266,7 @@ jobs:
             scripts/477_mgbatt_shadow_stage.py
             scripts/472_a3b_lpass_codec_d54.py
             docs/p477-a3b-h3-shadow1-hlt-test-sheet.md
+            docs/p477-a3b-54-api-donor-and-r02-audit.md
             phase447-inventory/P472-A3A-Q6-SOURCE.json
             docs/p472-a3a-q6-firstboot-test.md
             docs/p472-a3a-a3c-q6-kbuild-and-kona-5_4-donor-audit.md
