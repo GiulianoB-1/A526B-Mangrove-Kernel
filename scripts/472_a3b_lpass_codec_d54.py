@@ -105,7 +105,7 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi/audio
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
-subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1
+subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1 -DCONFIG_MSM_CDC_PINCTRL=1
 subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MACRO=1 -DCONFIG_TX_MACRO=1 -DCONFIG_VA_MACRO=1
 subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1
 obj-y += soc/ asoc/
@@ -399,6 +399,23 @@ def check(root):
     ):
         if flags.count(root_flag) != 1:
             raise RuntimeError("P472 A3b UAPI include root count != 1: "+root_flag)
+    # WCD938x uses the genuine CDC pinctrl sleep/active control
+    # and must not enter the donor's no-op fallback branch. The real
+    # driver is selected as an A3b B1 object and its implementation
+    # supplies the proper extern declarations.
+    b1_flags=[line for line in target_make.splitlines()
+              if line.startswith("subdir-ccflags-$(CONFIG_P472_A3B_B1) +=")]
+    if (len(b1_flags)!=1 or
+        b1_flags[0].split().count("-DCONFIG_MSM_CDC_PINCTRL=1")!=1):
+        raise RuntimeError("P472 A3b real MSM CDC pinctrl config missing")
+    cdc_header=(target/"include/asoc/msm-cdc-pinctrl.h").read_text()
+    cdc_source=(target/"asoc/codecs/msm-cdc-pinctrl.c").read_text()
+    if (cdc_header.count("#if IS_ENABLED(CONFIG_MSM_CDC_PINCTRL)")!=1 or
+        cdc_header.count("extern int msm_cdc_pinctrl_set_wakeup_capable(")!=1 or
+        cdc_source.count("int msm_cdc_pinctrl_set_wakeup_capable(")!=1 or
+        cdc_source.count("int msm_cdc_pinctrl_select_sleep_state(")!=1 or
+        "msm-cdc-pinctrl.o" not in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P472 A3b real CDC pinctrl declarations/implementation drift")
     # WCD938x must use real IRQ and Class-H implementations. The
     # SM7325 5.4 fallback headers contain malformed/no-op stubs, while
     # B3 intentionally builds wcd-irq.c and wcd-clsh.c. Select their
