@@ -288,6 +288,20 @@ def stage(root, tg):
         "#include \"p472_a3a_q6asm_compress_compat.h\"\n",
         "Q6ASM private TouchGrass compressed ABI include",
     )
+    # Pinned TG marks these three file-private Q6ASM helpers static but
+    # also EXPORT_SYMBOLs them. 5.10 modpost rejects exporting static
+    # functions. Keep the static definitions and in-file callers intact.
+    # No exported external ABI is removed: static symbols cannot be linked
+    # from another translation unit.
+    for symbol in ("q6asm_memory_map_regions",
+                   "q6asm_memory_unmap_regions",
+                   "q6asm_enc_cfg_blk_pcm_v5"):
+        declaration = "static int " + symbol + "("
+        export = "EXPORT_SYMBOL(" + symbol + ");\n"
+        if asm_source.count(declaration) < 1 or asm_source.count(export) != 1:
+            raise RuntimeError("P472 A3a static Q6ASM symbol donor drift: " +
+                               symbol)
+        asm_source = asm_source.replace(export, "", 1)
     asm.write_text(asm_source)
     (dest / "dsp/p472_a3a_q6asm_compress_compat.h").write_text(COMPRESS_COMPAT)
 
@@ -460,6 +474,15 @@ def check(root):
     compat = (d / "dsp/p472_a3a_q6asm_compress_compat.h").read_text()
     if asm.count('#include "p472_a3a_q6asm_compress_compat.h"') != 1:
         raise RuntimeError("P472 A3a Q6ASM private compressed ABI include missing")
+    # 5.10 modpost rejects static exports; keep all three helpers
+    # file-local while removing only the invalid TG EXPORT_SYMBOL entries.
+    for symbol in ("q6asm_memory_map_regions",
+                   "q6asm_memory_unmap_regions",
+                   "q6asm_enc_cfg_blk_pcm_v5"):
+        if "static int " + symbol + "(" not in asm:
+            raise RuntimeError("P472 A3a Q6ASM helper no longer static: " + symbol)
+        if "EXPORT_SYMBOL(" + symbol + ");" in asm:
+            raise RuntimeError("P472 A3a invalid Q6ASM static export: " + symbol)
     for item in ("SND_AUDIOCODEC_AC3", "SND_AUDIOCODEC_EAC3",
                  "SND_AUDIOCODEC_DTS", "SND_AUDIOCODEC_TRUEHD",
                  "COMPRESSED_TIMESTAMP_FLAG",
