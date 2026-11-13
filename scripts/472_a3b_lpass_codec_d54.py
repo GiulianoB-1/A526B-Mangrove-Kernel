@@ -553,7 +553,7 @@ def check(root):
         if mbhc_core.count(required)!=1:
             raise RuntimeError("P472 A3b FSA4480 fail-closed ABI missing: "+required)
     if (fsa_header.count("#define FSA4480_I2C_H")!=1 or
-        fsa_header.count("int fsa4480_reg_notifier(")!=1 or
+        fsa_header.count("int fsa4480_reg_notifier(")!=2 or
         "fsa4480.o" in (target/"asoc/codecs/Makefile").read_text()):
         raise RuntimeError("P472 A3b FSA4480 original header/driver isolation drift")
     # Real 5.10 ASoC and CPU latency QoS APIs, not compat stubs.
