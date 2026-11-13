@@ -200,9 +200,10 @@ def adapt_510_api(rel,data):
             if data.count(old_name)!=count or new_name in data:
                 raise RuntimeError("P472 A3b SWR CPU latency lifecycle donor drift: "+old_name)
             data=data.replace(old_name,new_name)
-        if data.count("#include <linux/pm_qos.h>")!=1:
-            raise RuntimeError("P472 A3b SWR 5.4 pm_qos header not present")
-        # Keep struct pm_qos_request, which remains the real ACK 5.10 ABI.
+        # swr-mstr-ctrl.h includes linux/pm_qos.h and retains the real
+        # struct pm_qos_request, still provided by ACK 5.10.
+        if "#include <linux/pm_qos.h>" in data:
+            raise RuntimeError("P472 A3b SWR unexpected direct QoS include drift")
     return data
 
 
@@ -299,6 +300,10 @@ def check(root):
     if (bolero.count("snd_soc_component_read(")!=2 or
         "snd_soc_component_read32(" in bolero):
         raise RuntimeError("P472 A3b Bolero 5.10 ASoC codec-ID reads missing")
+    swr_header=(target/"soc/swr-mstr-ctrl.h").read_text()
+    if (swr_header.count("#include <linux/pm_qos.h>")!=1 or
+        swr_header.count("struct pm_qos_request pm_qos_req;")!=1):
+        raise RuntimeError("P472 A3b 5.10 QoS type/header unavailable")
     swr=(target/"soc/swr-mstr-ctrl.c").read_text()
     for symbol,n in (
         ("cpu_latency_qos_add_request(",1),
