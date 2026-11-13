@@ -107,7 +107,7 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1
 subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MACRO=1 -DCONFIG_TX_MACRO=1 -DCONFIG_VA_MACRO=1
-subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1
+subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1
 obj-y += soc/ asoc/
 '''
 
@@ -399,6 +399,34 @@ def check(root):
     ):
         if flags.count(root_flag) != 1:
             raise RuntimeError("P472 A3b UAPI include root count != 1: "+root_flag)
+    # WCD938x must use real IRQ and Class-H implementations. The
+    # SM7325 5.4 fallback headers contain malformed/no-op stubs, while
+    # B3 intentionally builds wcd-irq.c and wcd-clsh.c. Select their
+    # actual declaration branches; never compile fake IRQ success.
+    b3_flags=[line for line in target_make.splitlines()
+              if line.startswith("subdir-ccflags-$(CONFIG_P472_A3B_B3) +=")]
+    if len(b3_flags)!=1:
+        raise RuntimeError("P472 A3b B3 compiler flag line missing/duplicate")
+    for token in ("-DCONFIG_WCD9XXX_CODEC_CORE_V2=1",
+                  "-DCONFIG_SND_SOC_WCD9XXX_V2=1"):
+        if b3_flags[0].split().count(token)!=1:
+            raise RuntimeError("P472 A3b real WCD IRQ/Class-H config missing: "+token)
+    irq_header=(target/"include/asoc/wcd-irq.h").read_text()
+    clsh_header=(target/"include/asoc/wcd-clsh.h").read_text()
+    if (irq_header.count("IS_ENABLED(CONFIG_WCD9XXX_CODEC_CORE_V2)")!=1 or
+        clsh_header.count("#ifdef CONFIG_SND_SOC_WCD9XXX_V2")!=1):
+        raise RuntimeError("P472 A3b WCD real IRQ/Class-H header selection drift")
+    irq_c=(target/"asoc/codecs/wcd-irq.c").read_text()
+    clsh_c=(target/"asoc/codecs/wcd-clsh.c").read_text()
+    for required in ("int wcd_irq_init(", "int wcd_request_irq("):
+        if irq_c.count(required)!=1:
+            raise RuntimeError("P472 A3b real WCD IRQ implementation absent: "+required)
+    for required in ("void wcd_cls_h_fsm(", "void wcd_cls_h_init("):
+        if clsh_c.count(required)!=1:
+            raise RuntimeError("P472 A3b real WCD Class-H implementation absent: "+required)
+    if ("wcd-irq.o" not in (target/"asoc/codecs/Makefile").read_text() or
+        "wcd-clsh.o" not in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P472 A3b WCD support real objects not compiled")
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
