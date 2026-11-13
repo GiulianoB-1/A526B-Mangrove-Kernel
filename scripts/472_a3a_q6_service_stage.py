@@ -171,6 +171,18 @@ def stage(root, tg):
             raise RuntimeError("P472 A3a duplicate staging: " + srcname)
         shutil.copy2(source, target)
 
+    # Stage pinned headers before adapting q6lsm.h below. A2a may already
+    # have 5.10-adjusted headers; copy only missing files, never overwrite.
+    for relative in ("include/dsp", "include/ipc", "include/uapi"):
+        droot = donor / relative
+        if not droot.is_dir():
+            raise RuntimeError("P472 A3a donor header path unavailable "+relative)
+        for path in sorted(droot.rglob("*.h")):
+            target = dest / path.relative_to(donor)
+            if not target.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+
     # TG q6adm uses the real msm_audio_ion allocator and high-address
     # helper, but does not directly include their declaration header.
     # A2a already stages the real 5.10-adapted ION header/provider.
@@ -229,17 +241,6 @@ def stage(root, tg):
         target = dest / "dsp" / srcname
         if not target.exists():
             shutil.copy2(source, target)
-    # Preserve the existing A2a ION/ABI adaptations; copy only missing
-    # pinned donor headers, never replace adjusted 5.10 definitions.
-    for relative in ("include/dsp", "include/ipc", "include/uapi"):
-        droot = donor / relative
-        if not droot.is_dir():
-            raise RuntimeError("P472 A3a donor header path unavailable "+relative)
-        for path in sorted(droot.rglob("*.h")):
-            target = dest / path.relative_to(donor)
-            if not target.is_file():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
     init = dest / "dsp/p472_a3a_q6_init.c"
     if init.exists():
         raise RuntimeError("P472 A3a init collision")
