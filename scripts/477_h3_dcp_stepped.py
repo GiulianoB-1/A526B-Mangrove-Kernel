@@ -20,6 +20,12 @@ MARK = "P477_H3_SINGLE_WRITER_STEPPED_DCP_ONLY_V1"
 # Insert inside the existing #if CONFIG_P476_H2 block, following H2's
 # original p476_h2_off() function and preceding p476_h2_tick().
 H3 = r'''
+/* Shared with legacy H2: a single real H2 ON format string. */
+static void p476_h2_on_log(struct a52d_fg *fg,int vbus,const char *type)
+{
+    dev_info(fg->dev,"P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s\n",
+             vbus,type);
+}
 /* P477_H3_SINGLE_WRITER_STEPPED_DCP_ONLY_V1
  * TG sm5714_charger.c:243-264 maps FCC to CHGCNTL2 0x18.
  * The live A52 TA DT specifies input 1800 / battery FCC 2100 mA.
@@ -180,8 +186,7 @@ static void p477_h3_tick(struct a52d_fg *fg, int bat, int chg)
       "P477 H3 SET ma=%d code=0x%02x vbuscntl=0x44 type=DCP bat=%d chg=%d\n",
       next,p477_h3_code(next),bat,chg);
     if(next==1000)
-        dev_info(fg->dev,
-          "P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s\n",vbus,type);
+        p476_h2_on_log(fg,vbus,type);
     return;
 off:
     p477_h3_limit(fg,500,reason?reason:"UNKNOWN");
@@ -260,6 +265,7 @@ def check(root):
             raise RuntimeError("P477 missing audit marker/gate "+piece)
     assert 7+(1500000-109375)//15625 == 0x60
     assert 7+(2100000-109375)//15625 == 0x86
+    assert s.count("P476 H2 ON cur=1000")==1
     assert s.count("i2c_smbus_write_byte_data(")==2
     # The helper's register allowlist is unchanged; it rejects any
     # attempt to write a CHGCNTL2 code >0x86, regardless of caller.
@@ -337,6 +343,14 @@ def stage(root,tg):
     s=once(s,'static void p476_h2_tick(struct a52d_fg *fg,int bat,int chg)',
            H3+'\nstatic void p476_h2_tick(struct a52d_fg *fg,int bat,int chg)',
            "H3 current controller, independent Kconfig")
+    # Replace the original H2 inline logger with the shared real
+    # logger, preserving exactly one marker in the final source.
+    s=once(s,
+       '\tdev_info(fg->dev,"P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s\n",\n'
+       '\t\t vbus,type);',
+       '\tp476_h2_on_log(fg,vbus,type);',
+       "unique H2 marker retained under both H2 and H3")
+
     s=once(s,
        '\t/* A 2-second H0 guard pass and H0 CHARGING status are prerequisites. */',
        '#if IS_ENABLED(CONFIG_P477_H3)\n'
