@@ -250,6 +250,8 @@ def check(root):
     k=(root/K).read_text()
     assert s.count("P477_H3_SINGLE_WRITER_STEPPED_DCP_ONLY_V1")==1
     assert s.count("config P477_H3")==1
+    assert s.count("config P477_H0_REARM_FIX")==1
+    assert "default n" in k.split("config P477_H0_REARM_FIX",1)[1].split("config ",1)[0]
     scope=k.split("config P477_H3",1)[1].split("config ",1)[0]
     assert "depends on P476_H2 && P475_S2_CABLE" in scope and "default n" in scope
     for piece in ('DEVICE_ATTR(a52_h2_ma,0600', 'P477 H3 SET ma=%d code=0x%02x',
@@ -293,10 +295,12 @@ def stage(root,tg):
     # must NOT relabel CHARGING -> ARMED or clear an inhibit latch.
     h0_anchor='    if(arm) {\n        int bt=a52g_ntc_temp(fg),ct=a52h_chg_ntc_temp(fg);'
     s=once(s,h0_anchor,
+       '#if IS_ENABLED(CONFIG_P477_H0_REARM_FIX)\n'
        '    if(arm && fg->a52h0_active) {\n'
        '        mutex_unlock(&fg->a52h0_lock);\n'
        '        return len; /* idempotent: preserve CHARGING and latch */\n'
-       '    }\n'+h0_anchor,"active H0 manual rearm")
+       '    }\n'
+       '#endif\n'+h0_anchor,"active H0 manual rearm")
 
     # Explicit H2 refusals must be observable, including current H0 state.
     h2_anchor=('\t\t    strcmp(fg->a52h0_state,"CHARGING"))\n'
@@ -388,6 +392,14 @@ def stage(root,tg):
     k=root/K;ks=k.read_text()
     if "config P477_H3" in ks:raise RuntimeError("P477 H3 Kconfig already exists")
     k.write_text(ks+'''
+config P477_H0_REARM_FIX
+    bool "P477 H0 repeated manual arm preserves active state"
+    depends on A52_447D_SM5714_RO
+    default n
+    help
+      Opt-in source fix: if H0 is already active, echo 1 is idempotent
+      and cannot change CHARGING or clear a charging inhibit latch.
+
 config P477_H3
     bool "P477 H3 manual DCP battery fast-current ramp (500-2100mA)"
     depends on P476_H2 && P475_S2_CABLE
