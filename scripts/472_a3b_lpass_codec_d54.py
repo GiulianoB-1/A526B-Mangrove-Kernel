@@ -257,6 +257,36 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "asoc/codecs/msm-cdc-pinctrl.c":
+        # SM7325 5.4 uses downstream msm_gpio_mpm_wake_set() with a
+        # private TLMM wake register API. ACK 5.10 pinctrl-msm.c has
+        # gpio IRQ wake propagation via irq_chip::irq_set_wake.
+        # This is a real IRQ core operation and propagates any errors,
+        # not a GPIO/MPM wake success stub or a private header copy.
+        old_include="#include <linux/pinctrl/qcom-pinctrl.h>"
+        new_include=(
+            "#include <linux/pinctrl/consumer.h>\n"
+            "#include <linux/interrupt.h>"
+        )
+        if data.count(old_include)!=1:
+            raise RuntimeError("P472 A3b CDC private 5.4 TLMM header drift")
+        data=data.replace(old_include,new_include,1)
+        old_call=(
+            "\t\t\tret = msm_gpio_mpm_wake_set(gpio_data->tlmm_gpio[i],\n"
+            "\t\t\t\t\t\t    enable);"
+        )
+        new_call=(
+            "\t\t\t/* Propagate actual GPIO/IRQ mapping and wake errors. */\n"
+            "\t\t\tint gpio_irq = gpio_to_irq(gpio_data->tlmm_gpio[i]);\n"
+            "\t\t\tif (gpio_irq < 0) {\n"
+            "\t\t\t\tret = gpio_irq;\n"
+            "\t\t\t\tgoto exit;\n"
+            "\t\t\t}\n"
+            "\t\t\tret = irq_set_irq_wake(gpio_irq, enable);"
+        )
+        if data.count(old_call)!=1:
+            raise RuntimeError("P472 A3b CDC downstream GPIO wake call drift")
+        data=data.replace(old_call,new_call,1)
     elif rel == "soc/swr-mstr-ctrl.c":
         # 5.10 CPU_IDLE split the old PM_QOS_CPU_DMA_LATENCY class
         # out into cpu_latency_qos_* functions. This preserves a real
@@ -416,6 +446,21 @@ def check(root):
         cdc_source.count("int msm_cdc_pinctrl_select_sleep_state(")!=1 or
         "msm-cdc-pinctrl.o" not in (target/"asoc/codecs/Makefile").read_text()):
         raise RuntimeError("P472 A3b real CDC pinctrl declarations/implementation drift")
+    # Native 5.10 wake IRQ path, no fake success on unsupported GPIO.
+    cdc_510=(target/"asoc/codecs/msm-cdc-pinctrl.c").read_text()
+    for code in (
+        "#include <linux/pinctrl/consumer.h>",
+        "#include <linux/interrupt.h>",
+        "int gpio_irq = gpio_to_irq(gpio_data->tlmm_gpio[i]);",
+        "ret = irq_set_irq_wake(gpio_irq, enable);",
+        "if (gpio_irq < 0) {",
+        "ret = gpio_irq;",
+    ):
+        if cdc_510.count(code)!=1:
+            raise RuntimeError("P472 A3b real 5.10 GPIO IRQ wake missing: "+code)
+    if ("msm_gpio_mpm_wake_set(" in cdc_510 or
+            "#include <linux/pinctrl/qcom-pinctrl.h>" in cdc_510):
+        raise RuntimeError("P472 A3b unsupported 5.4 GPIO wake API survived")
     # WCD938x must use real IRQ and Class-H implementations. The
     # SM7325 5.4 fallback headers contain malformed/no-op stubs, while
     # B3 intentionally builds wcd-irq.c and wcd-clsh.c. Select their
