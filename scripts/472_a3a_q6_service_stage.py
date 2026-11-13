@@ -185,6 +185,45 @@ def stage(root, tg):
         "#include <dsp/audio_cal_utils.h>\\n#include <dsp/msm_audio_ion.h>\\n".replace("\\n", "\n"),
         "real A2a msm_audio_ion prototypes for q6adm",
     ))
+    # TG's q6asm debugfs latency timestamps use 4.19 timeval/timespec.
+    # Linux 5.10 uses timespec64; retain the original sec/usec readout
+    # using a private debugfs-only struct and a real monotonic timestamp.
+    asm = dest / "dsp/q6asm.c"
+    asm_source = asm.read_text()
+    if asm_source.count("static struct timeval") != 6:
+        raise RuntimeError("P472 A3a TG q6asm timeval sites changed")
+    asm_source = one(
+        asm_source, "#include <linux/time.h>\\n".replace("\\n", "\n"),
+        "#include <linux/time.h>\\n#include <linux/ktime.h>\\n".replace("\\n", "\n"),
+        "5.10 kernel monotonic time declarations",
+    )
+    asm_source = one(
+        asm_source, "#define IN_BUFFER_SIZE 24\\n".replace("\\n", "\n"),
+        ("#define IN_BUFFER_SIZE 24\\n"
+         "/* Debugfs timestamps retain TG's seconds/microseconds output. */\\n"
+         "struct p472_a3a_latency_timeval {\\n"
+         "\\tlong tv_sec;\\n"
+         "\\tlong tv_usec;\\n"
+         "};\\n").replace("\\n", "\n").replace("\\t", "\t"),
+        "private latency timestamp structure",
+    )
+    asm_source = asm_source.replace("static struct timeval",
+                                    "static struct p472_a3a_latency_timeval")
+    asm_source = one(
+        asm_source,
+        "struct timespec temp_tspec = ktime_to_timespec(kTimeNsec);",
+        "struct timespec64 temp_tspec = ktime_to_timespec64(kTimeNsec);",
+        "5.10 monotonic timespec64 conversion",
+    )
+    asm.write_text(asm_source)
+
+    # A2a already adapted the pinned TG allocator to ACK's real 5.10
+    # legacy ION provider. q6lsm.h only needs the correct public header.
+    lsm_header = dest / "include/dsp/q6lsm.h"
+    lsm_header.write_text(one(
+        lsm_header.read_text(), "#include <linux/msm_ion.h>",
+        "#include <linux/ion.h>", "LSM real ACK ION header",
+    ))
     for srcname in HELPERS:
         source = donor / "dsp" / srcname
         target = dest / "dsp" / srcname
@@ -232,6 +271,21 @@ def check(root):
     for item in required_objects:
         if item not in mk:
             raise RuntimeError("P472 A3a missing linked object "+item)
+    # Preserve TG debugfs output units without restoring removed 4.19
+    # kernel types, and require the actual ACK ION header for LSM.
+    asm = (d / "dsp/q6asm.c").read_text()
+    lsm_header = (d / "include/dsp/q6lsm.h").read_text()
+    if asm.count("static struct p472_a3a_latency_timeval") != 6:
+        raise RuntimeError("P472 A3a 5.10 debugfs timestamp adaptation missing")
+    if ("struct timespec64 temp_tspec = ktime_to_timespec64(kTimeNsec);"
+            not in asm or "#include <linux/ktime.h>" not in asm):
+        raise RuntimeError("P472 A3a monotonic time 5.10 API missing")
+    if ("static struct timeval" in asm or
+            "ktime_to_timespec(kTimeNsec)" in asm):
+        raise RuntimeError("P472 A3a legacy timespec API still used")
+    if ("#include <linux/ion.h>" not in lsm_header or
+            "#include <linux/msm_ion.h>" in lsm_header):
+        raise RuntimeError("P472 A3a LSM must use real 5.10 ACK ION")
     # q6adm must call the real, already-linked A2a ION implementation
     # using TG's exact header prototypes, not undeclared externs.
     adm = (d / "dsp/q6adm.c").read_text()
