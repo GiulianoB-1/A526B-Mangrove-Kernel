@@ -541,7 +541,7 @@ def check(root):
         raise RuntimeError("P472 A3b real WCD DSP manager config absent")
     for expected,content in (
         ("#ifdef CONFIG_WCD9XXX_CODEC_CORE",wdsp_h),
-        ("int wcd_dsp_mgr_init(void)",wdsp_h),
+        ("int wcd_dsp_mgr_init(void);",wdsp_h),
         ("int wcd_dsp_mgr_init(void)",wdsp_c),
         ("void wcd_dsp_mgr_exit(void)",wdsp_c),
         ("#include <sound/wcd-dsp-mgr.h>",wdsp_soc),
