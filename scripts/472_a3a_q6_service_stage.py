@@ -270,18 +270,21 @@ def stage(root, tg):
     ):
         if donor_compress.count(definition) != 1:
             raise RuntimeError("P472 A3a pinned TG compress ABI drift: " + definition)
-    metadata = ("struct snd_codec_metadata {\\n"
-                "\\t__u32 length;\\n"
-                "\\t__u32 offset;\\n"
-                "\\t__u64 timestamp;\\n"
-                "\\t__u32 reserved[4];\\n"
-                "};").replace("\\\\n", "\\n").replace("\\\\t", "\\t")
+    metadata = (
+        "struct snd_codec_metadata {\n"
+        "\t__u32 length;\n"
+        "\t__u32 offset;\n"
+        "\t__u64 timestamp;\n"
+        "\t__u32 reserved[4];\n"
+        "};"
+    )
     if donor_compress.count(metadata) != 1:
         raise RuntimeError("P472 A3a pinned TG compressed metadata layout drift")
     asm_source = one(
-        asm_source, "#include <sound/compress_params.h>\\n".replace("\\\\n", "\\n"),
-        ("#include <sound/compress_params.h>\\n"
-         "#include \\"p472_a3a_q6asm_compress_compat.h\\"\\n").replace("\\\\n", "\\n"),
+        asm_source,
+        "#include <sound/compress_params.h>\n",
+        "#include <sound/compress_params.h>\n"
+        "#include \"p472_a3a_q6asm_compress_compat.h\"\n",
         "Q6ASM private TouchGrass compressed ABI include",
     )
     asm.write_text(asm_source)
