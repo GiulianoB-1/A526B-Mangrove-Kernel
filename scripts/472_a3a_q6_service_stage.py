@@ -319,6 +319,29 @@ def stage(root, tg):
         voice_header.read_text(), "#include <linux/msm_ion.h>",
         "#include <linux/ion.h>", "voice real ACK ION header",
     ))
+
+    # The real TG notifier implementation is built by CONFIG_P472_A3A_Q6.
+    # TG's public header gates its extern declarations on an older
+    # SND_SOC_MSM_QDSP6V2_INTF config, so without this selection it emits
+    # -ENOSYS static-inline stubs which conflict with the real functions.
+    # Keep both legacy selectors and add the actual 5.10 Kconfig owner.
+    notify_header = dest / "include/dsp/msm-audio-event-notify.h"
+    notify_source = notify_header.read_text()
+    notify_source = one(
+        notify_source, "IS_ENABLED(CONFIG_SND_SOC_MSM_QDSP6V2_INTF)",
+        "IS_ENABLED(CONFIG_P472_A3A_Q6) || \\\n\t"
+        "IS_ENABLED(CONFIG_SND_SOC_MSM_QDSP6V2_INTF)",
+        "real notifier header declarations selected by A3a",
+    )
+    notify_header.write_text(notify_source)
+
+    # Linux 5.10 renamed zero-before-free kzfree() to kfree_sensitive().
+    # Preserve RTAC's wipe-before-release behavior at all 14 donor sites.
+    rtac = dest / "dsp/rtac.c"
+    rtac_source = rtac.read_text()
+    if rtac_source.count("kzfree(") != 14 or "kfree_sensitive(" in rtac_source:
+        raise RuntimeError("P472 A3a pinned TG RTAC free API drift")
+    rtac.write_text(rtac_source.replace("kzfree(", "kfree_sensitive("))
     for srcname in HELPERS:
         source = donor / "dsp" / srcname
         target = dest / "dsp" / srcname
@@ -377,6 +400,15 @@ def check(root):
     if ("#include <linux/ion.h>" not in voice_header or
             "#include <linux/msm_ion.h>" in voice_header):
         raise RuntimeError("P472 A3a voice must use real 5.10 ACK ION")
+    notify_header = (d / "include/dsp/msm-audio-event-notify.h").read_text()
+    if notify_header.count("IS_ENABLED(CONFIG_P472_A3A_Q6)") != 1:
+        raise RuntimeError("P472 A3a real notifier Kconfig gate missing")
+    if ("IS_ENABLED(CONFIG_SND_SOC_MSM_QDSP6V2_INTF)" not in notify_header or
+            "IS_ENABLED(CONFIG_SND_SOC_MSM_QDSP6V2_VM)" not in notify_header):
+        raise RuntimeError("P472 A3a TG notifier legacy alternatives lost")
+    rtac = (d / "dsp/rtac.c").read_text()
+    if ("kzfree(" in rtac or rtac.count("kfree_sensitive(") != 14):
+        raise RuntimeError("P472 A3a RTAC must securely free all 14 TG buffers")
     # Missing in generic ACK 5.10, these TG ABI definitions are scoped
     # only to Q6ASM. Prove the old userspace buffer prefix remains 32 bytes.
     compat = (d / "dsp/p472_a3a_q6asm_compress_compat.h").read_text()
