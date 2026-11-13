@@ -23,7 +23,8 @@ int mgbatt_parse_live_dt(struct mgbatt_policy *p)
 	if (!p) return -EINVAL;
 	battery=of_find_compatible_node(NULL,NULL,"samsung,sec-battery");
 	if (!battery) return -ENODEV;
-	info=of_get_child_by_name(battery,"cable-info");
+	/* TG r02 DTS:435 battery and :690 cable-info are SIBLINGS. */
+	info=of_get_child_by_name(battery->parent,"cable-info");
 	if (!info) goto out_battery;
 	if (mgbatt_read(battery,"battery,chg_float_voltage",&p->float_mv) ||
 	    mgbatt_read(battery,"battery,swelling_high_temp_block",&p->bat_block) ||
