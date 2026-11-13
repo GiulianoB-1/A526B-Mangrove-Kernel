@@ -351,7 +351,7 @@ def stage(root,tg):
     # Replace the original H2 inline logger with the shared real
     # logger, preserving exactly one marker in the final source.
     s=once(s,
-       '\tdev_info(fg->dev,"P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s\n",\n'
+       '\tdev_info(fg->dev,"P476 H2 ON cur=1000 vbuscntl=0x%02x type=%s\\n",\n'
        '\t\t vbus,type);',
        '\tp476_h2_on_log(fg,vbus,type);',
        "unique H2 marker retained under both H2 and H3")
