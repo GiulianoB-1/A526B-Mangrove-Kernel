@@ -202,6 +202,23 @@ def adapt_510_api(rel,data):
             raise RuntimeError("P472 A3b macro read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
         if rel=="asoc/codecs/bolero/rx-macro.c":
+            # In optional impedance sensing the 5.4 component read uses
+            # a three-argument errno-returning API. Do not convert this
+            # to the 5.10 unsigned-value API and silently lose errors.
+            # ACK 5.10 soc-component.h:202 exposes the actual regmap.
+            old_imp="ret = snd_soc_component_read(component, reg, &val);"
+            new_imp=(
+                "if (!component->regmap)\n"
+                "\t\treturn -ENODEV;\n"
+                "\tret = regmap_read(component->regmap, reg, &val);"
+            )
+            if data.count(old_imp)!=1:
+                raise RuntimeError("P472 A3b RX optional impedance read ABI drift")
+            data=data.replace(old_imp,new_imp,1)
+            inc="#include <linux/pm_runtime.h>"
+            if data.count(inc)!=1:
+                raise RuntimeError("P472 A3b RX regmap include anchor drift")
+            data=data.replace(inc,inc+"\n#include <linux/regmap.h>",1)
             # The actual RX mute implementation runs on playback; 5.10
             # include/sound/soc-dai.h:246-250 uses .mute_stream
             # with an additional stream direction, not .digital_mute.
@@ -354,6 +371,10 @@ def check(root):
                 "snd_soc_component_read32(" in macro):
             raise RuntimeError("P472 A3b macro 5.10 ASoC read conversion missing "+rel)
     rx=(target/"asoc/codecs/bolero/rx-macro.c").read_text()
+    if (rx.count("regmap_read(component->regmap, reg, &val);")!=1 or
+        "snd_soc_component_read(component, reg, &val);" in rx or
+        "#include <linux/regmap.h>" not in rx):
+        raise RuntimeError("P472 A3b optional RX impedance errno path missing")
     for token in (
         ".mute_stream = rx_macro_digital_mute,",
         "static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute, int stream);",
