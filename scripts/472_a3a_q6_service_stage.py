@@ -76,6 +76,7 @@ BOOT = r'''// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
+#include <linux/kobject.h>
 #include <dsp/q6core.h>
 
 extern int rtac_init(void);
@@ -342,6 +343,32 @@ def stage(root, tg):
     if rtac_source.count("kzfree(") != 14 or "kfree_sensitive(" in rtac_source:
         raise RuntimeError("P472 A3a pinned TG RTAC free API drift")
     rtac.write_text(rtac_source.replace("kzfree(", "kfree_sensitive("))
+
+    # TG avtimer uses removed 4.19 timespec/timekeeping APIs.
+    # Convert its clock-offset calculation to the equivalent 5.10
+    # timespec64 accessors without changing clock IDs or microsecond units.
+    avtimer = dest / "dsp/avtimer.c"
+    av_source = avtimer.read_text()
+    for old, new, expected in (
+        ("#include <linux/io.h>\n",
+         "#include <linux/io.h>\n#include <linux/timekeeping.h>\n", 1),
+        ("struct timespec ts;", "struct timespec64 ts;", 1),
+        ("sizeof(struct timespec)", "sizeof(ts)", 1),
+        ("getrawmonotonic(&ts);", "ktime_get_raw_ts64(&ts);", 1),
+        ("get_monotonic_boottime(&ts);",
+         "ktime_get_boottime_ts64(&ts);", 1),
+        ("ktime_get_ts(&ts);", "ktime_get_ts64(&ts);", 1),
+        ("ktime_get_real_ts(&ts);", "ktime_get_real_ts64(&ts);", 1),
+        # On arm64, devm_ioremap() retains the device-register mapping
+        # semantics of the removed 4.19 devm_ioremap_nocache().
+        ("devm_ioremap_nocache(", "devm_ioremap(", 2),
+    ):
+        found = av_source.count(old)
+        if found != expected:
+            raise RuntimeError("P472 A3a avtimer donor API drift: " +
+                               old + " count=" + str(found))
+        av_source = av_source.replace(old, new)
+    avtimer.write_text(av_source)
     for srcname in HELPERS:
         source = donor / "dsp" / srcname
         target = dest / "dsp" / srcname
@@ -409,6 +436,25 @@ def check(root):
     rtac = (d / "dsp/rtac.c").read_text()
     if ("kzfree(" in rtac or rtac.count("kfree_sensitive(") != 14):
         raise RuntimeError("P472 A3a RTAC must securely free all 14 TG buffers")
+    # New A3a init includes q6core.h with its embedded kobject types.
+    if "#include <linux/kobject.h>" not in init:
+        raise RuntimeError("P472 A3a Q6 init missing 5.10 kobject types")
+    avtimer = (d / "dsp/avtimer.c").read_text()
+    for old in ("struct timespec ts;", "sizeof(struct timespec)",
+                "getrawmonotonic(&ts);", "get_monotonic_boottime(&ts);",
+                "ktime_get_ts(&ts);", "ktime_get_real_ts(&ts);",
+                "devm_ioremap_nocache("):
+        if old in avtimer:
+            raise RuntimeError("P472 A3a legacy avtimer time/MMIO API " + old)
+    for new in ("#include <linux/timekeeping.h>", "struct timespec64 ts;",
+                "ktime_get_raw_ts64(&ts);",
+                "ktime_get_boottime_ts64(&ts);",
+                "ktime_get_ts64(&ts);", "ktime_get_real_ts64(&ts);",
+                "sys_time = ts.tv_sec * 1000000LL + div64_u64(ts.tv_nsec, 1000);"):
+        if new not in avtimer:
+            raise RuntimeError("P472 A3a avtimer 5.10 offset semantics missing " + new)
+    if avtimer.count("devm_ioremap(") != 2:
+        raise RuntimeError("P472 A3a avtimer must map both real timer registers")
     # Missing in generic ACK 5.10, these TG ABI definitions are scoped
     # only to Q6ASM. Prove the old userspace buffer prefix remains 32 bytes.
     compat = (d / "dsp/p472_a3a_q6asm_compress_compat.h").read_text()
