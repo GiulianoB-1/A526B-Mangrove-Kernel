@@ -21,6 +21,36 @@ SOURCE = (
     "msm-audio-event-notify.c", "avtimer.c",
 )
 HELPERS = ("q6afecal-hwdep.h", "q6_init.h")
+COMPRESS_COMPAT = r'''/* SPDX-License-Identifier: GPL-2.0-only */
+/* P472 A3a: Q6ASM-only compatibility with pinned TG 4.19 compressed ABI.
+ * Do not alter GKI's global include/uapi/sound/compress_params.h.
+ * Source: TG 6bf351bd include/uapi/sound/compress_params.h.
+ */
+#ifndef P472_A3A_Q6ASM_COMPRESS_COMPAT_H
+#define P472_A3A_Q6ASM_COMPRESS_COMPAT_H
+
+#include <linux/types.h>
+#include <linux/build_bug.h>
+
+/* Preserve TouchGrass codec IDs sent to the userspace event callback. */
+#define SND_AUDIOCODEC_AC3    ((__u32) 0x00000015)
+#define SND_AUDIOCODEC_DTS    ((__u32) 0x00000018)
+#define SND_AUDIOCODEC_EAC3   ((__u32) 0x00000019)
+#define SND_AUDIOCODEC_TRUEHD ((__u32) 0x00000024)
+
+/* Preserve the 32-byte metadata prefix used for physical buffer mapping. */
+#define COMPRESSED_TIMESTAMP_FLAG 0x0001
+struct snd_codec_metadata {
+    __u32 length;
+    __u32 offset;
+    __u64 timestamp;
+    __u32 reserved[4];
+};
+static_assert(sizeof(struct snd_codec_metadata) == 32);
+
+#endif
+'''
+
 KCONFIG = """
 config P472_A3A_Q6
     bool "P472 A3a real TG Q6 AFE ASM ADM LSM, no ASoC"
@@ -227,7 +257,35 @@ def stage(root, tg):
         "struct timespec64 temp_tspec = ktime_to_timespec64(kTimeNsec);",
         "5.10 monotonic timespec64 conversion",
     )
+    # GKI 5.10's generic sound/compress_params.h intentionally lacks
+    # Qualcomm's extra codec IDs, timestamp flag and metadata prefix.
+    # Keep these pinned TG definitions private to q6asm.c, not global UAPI.
+    donor_compress = (tg / "include/uapi/sound/compress_params.h").read_text()
+    for definition in (
+        "#define SND_AUDIOCODEC_AC3                   ((__u32) 0x00000015)",
+        "#define SND_AUDIOCODEC_DTS                   ((__u32) 0x00000018)",
+        "#define SND_AUDIOCODEC_EAC3                  ((__u32) 0x00000019)",
+        "#define SND_AUDIOCODEC_TRUEHD                ((__u32) 0x00000024)",
+        "#define COMPRESSED_TIMESTAMP_FLAG 0x0001",
+    ):
+        if donor_compress.count(definition) != 1:
+            raise RuntimeError("P472 A3a pinned TG compress ABI drift: " + definition)
+    metadata = ("struct snd_codec_metadata {\\n"
+                "\\t__u32 length;\\n"
+                "\\t__u32 offset;\\n"
+                "\\t__u64 timestamp;\\n"
+                "\\t__u32 reserved[4];\\n"
+                "};").replace("\\\\n", "\\n").replace("\\\\t", "\\t")
+    if donor_compress.count(metadata) != 1:
+        raise RuntimeError("P472 A3a pinned TG compressed metadata layout drift")
+    asm_source = one(
+        asm_source, "#include <sound/compress_params.h>\\n".replace("\\\\n", "\\n"),
+        ("#include <sound/compress_params.h>\\n"
+         "#include \\"p472_a3a_q6asm_compress_compat.h\\"\\n").replace("\\\\n", "\\n"),
+        "Q6ASM private TouchGrass compressed ABI include",
+    )
     asm.write_text(asm_source)
+    (dest / "dsp/p472_a3a_q6asm_compress_compat.h").write_text(COMPRESS_COMPAT)
 
     # A2a already adapted the pinned TG allocator to ACK's real 5.10
     # legacy ION provider. q6lsm.h only needs the correct public header.
@@ -287,6 +345,18 @@ def check(root):
     if ("#include <linux/ion.h>" not in lsm_header or
             "#include <linux/msm_ion.h>" in lsm_header):
         raise RuntimeError("P472 A3a LSM must use real 5.10 ACK ION")
+    # Missing in generic ACK 5.10, these TG ABI definitions are scoped
+    # only to Q6ASM. Prove the old userspace buffer prefix remains 32 bytes.
+    compat = (d / "dsp/p472_a3a_q6asm_compress_compat.h").read_text()
+    if asm.count('#include "p472_a3a_q6asm_compress_compat.h"') != 1:
+        raise RuntimeError("P472 A3a Q6ASM private compressed ABI include missing")
+    for item in ("SND_AUDIOCODEC_AC3", "SND_AUDIOCODEC_EAC3",
+                 "SND_AUDIOCODEC_DTS", "SND_AUDIOCODEC_TRUEHD",
+                 "COMPRESSED_TIMESTAMP_FLAG",
+                 "struct snd_codec_metadata", "static_assert(sizeof(struct snd_codec_metadata) == 32)"):
+        if item not in compat:
+            raise RuntimeError("P472 A3a compressed ABI missing " + item)
+
     # q6adm must call the real, already-linked A2a ION implementation
     # using TG's exact header prototypes, not undeclared externs.
     adm = (d / "dsp/q6adm.c").read_text()
