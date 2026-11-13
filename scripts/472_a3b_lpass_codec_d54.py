@@ -176,6 +176,25 @@ def stage(root,tg,d54):
     # Entire private 5.4 header hierarchy stays sandboxed in a3b/include.
     # A3a includes and sources remain unchanged.
     shutil.copytree(donor/"include",target/"include")
+    # 5.4 downstream keeps these driver-required headers outside
+    # techpack/audio/include. Stage pinned originals privately, never
+    # edit global GKI include/ or invent ABI types/success stubs.
+    # SM7325 @c4cb0a97:
+    #   include/dt-bindings/sound/qcom,bolero-clk-rsc.h:10-18
+    #   include/soc/qcom/pm.h:12-30
+    extra_headers = (
+        "include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
+        "include/soc/qcom/pm.h",
+    )
+    for rel in extra_headers:
+        source=d54/rel
+        if not source.is_file():
+            raise RuntimeError("P472 A3b pinned 5.4 external header missing: "+rel)
+        dest=target/rel
+        if dest.exists():
+            raise RuntimeError("P472 A3b external header collision: "+rel)
+        dest.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(source,dest)
     allfiles=B1+B2+B3
     for rel in allfiles:
         dest=target/rel
@@ -218,6 +237,17 @@ def check(root):
         scope=k.split("config "+cfg,1)[1].split("config ",1)[0]
         if "default n" not in scope:
             raise RuntimeError("P472 A3b must be default off: "+cfg)
+    for rel in ("include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
+                "include/soc/qcom/pm.h"):
+        if not (target/rel).is_file():
+            raise RuntimeError("P472 A3b pinned external header absent: "+rel)
+    clk = (target/"include/dt-bindings/sound/qcom,bolero-clk-rsc.h").read_text()
+    if clk.count("#define MAX_CLK\t8") != 1:
+        raise RuntimeError("P472 A3b donor Bolero clock resource constants drift")
+    pm = (target/"include/soc/qcom/pm.h").read_text()
+    if (pm.count("msm_cpuidle_get_deep_idle_latency(void)") != 2 or
+            "#include <linux/cpuidle.h>" not in pm):
+        raise RuntimeError("P472 A3b real 5.4 SoundWire PM/QoS header drift")
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
