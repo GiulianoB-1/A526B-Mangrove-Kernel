@@ -181,6 +181,49 @@ def adapt_510_api(rel,data):
         if data.count(old) != 2 or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b Bolero ASoC read API donor drift")
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel in (
+        "asoc/codecs/bolero/rx-macro.c",
+        "asoc/codecs/bolero/tx-macro.c",
+        "asoc/codecs/bolero/va-macro.c",
+    ):
+        # Pinned donor (Samsung SM7325 @c4cb0a97):
+        # RX macro: rx-macro.c:1029-3384, 38 32-bit register reads
+        # TX macro: tx-macro.c:556-1266, 11 reads
+        # VA macro: va-macro.c:854-1334, 9 reads
+        # ACK 5.10 include/sound/soc-component.h:340-341:
+        # snd_soc_component_read() returns unsigned int, same real I/O.
+        old="snd_soc_component_read32("
+        expected={
+            "asoc/codecs/bolero/rx-macro.c":38,
+            "asoc/codecs/bolero/tx-macro.c":11,
+            "asoc/codecs/bolero/va-macro.c":9,
+        }[rel]
+        if data.count(old)!=expected:
+            raise RuntimeError("P472 A3b macro read32 donor drift: "+rel)
+        data=data.replace(old,"snd_soc_component_read(")
+        if rel=="asoc/codecs/bolero/rx-macro.c":
+            # The actual RX mute implementation runs on playback; 5.10
+            # include/sound/soc-dai.h:246-250 uses .mute_stream
+            # with an additional stream direction, not .digital_mute.
+            old_decl="static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute);"
+            new_decl="static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute, int stream);"
+            old_cb="\t.digital_mute = rx_macro_digital_mute,"
+            new_cb="\t.mute_stream = rx_macro_digital_mute,"
+            old_def="static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute)\n{"
+            new_def="static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute, int stream)\n{"
+            for before,after in ((old_decl,new_decl),
+                                 (old_cb,new_cb),(old_def,new_def)):
+                if data.count(before)!=1:
+                    raise RuntimeError("P472 A3b RX mute ABI donor drift: "+before)
+                data=data.replace(before,after,1)
+            old_body="\tif (mute)\n\t\treturn 0;"
+            new_body=("\t/* Only playback has RX DAI mute semantics. */\n"
+                      "\tif (stream != SNDRV_PCM_STREAM_PLAYBACK)\n"
+                      "\t\treturn -EINVAL;\n"
+                      "\tif (mute)\n\t\treturn 0;")
+            if data.count(old_body)!=1:
+                raise RuntimeError("P472 A3b RX mute body donor drift")
+            data=data.replace(old_body,new_body,1)
     elif rel == "soc/swr-mstr-ctrl.c":
         # 5.10 CPU_IDLE split the old PM_QOS_CPU_DMA_LATENCY class
         # out into cpu_latency_qos_* functions. This preserves a real
@@ -300,6 +343,27 @@ def check(root):
     if (bolero.count("snd_soc_component_read(")!=2 or
         "snd_soc_component_read32(" in bolero):
         raise RuntimeError("P472 A3b Bolero 5.10 ASoC codec-ID reads missing")
+    # All three real Bolero macro I/O paths use ACK 5.10 ASoC APIs.
+    for rel,expected in (
+        ("asoc/codecs/bolero/rx-macro.c",38),
+        ("asoc/codecs/bolero/tx-macro.c",11),
+        ("asoc/codecs/bolero/va-macro.c",9),
+    ):
+        macro=(target/rel).read_text()
+        if (macro.count("snd_soc_component_read(")!=expected or
+                "snd_soc_component_read32(" in macro):
+            raise RuntimeError("P472 A3b macro 5.10 ASoC read conversion missing "+rel)
+    rx=(target/"asoc/codecs/bolero/rx-macro.c").read_text()
+    for token in (
+        ".mute_stream = rx_macro_digital_mute,",
+        "static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute, int stream);",
+        "static int rx_macro_digital_mute(struct snd_soc_dai *dai, int mute, int stream)\n{",
+        "if (stream != SNDRV_PCM_STREAM_PLAYBACK)",
+    ):
+        if rx.count(token)!=1:
+            raise RuntimeError("P472 A3b RX 5.10 DAI mute callback missing "+token)
+    if ".digital_mute = rx_macro_digital_mute," in rx:
+        raise RuntimeError("P472 A3b legacy RX .digital_mute remained")
     swr_header=(target/"soc/swr-mstr-ctrl.h").read_text()
     if (swr_header.count("#include <linux/pm_qos.h>")!=1 or
         swr_header.count("struct pm_qos_request pm_qos_req;")!=1):
