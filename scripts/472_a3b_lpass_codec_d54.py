@@ -364,9 +364,16 @@ def check(root):
         hwdep_user.read_text().count("#include <audio/sound/msmcal-hwdep.h>") != 1):
         raise RuntimeError("P472 A3b WCD938x hwdep header/source ABI drift")
     target_make=(target/"Makefile").read_text()
-    if (target_make.count("a3b/include/uapi\\n") != 1 or
-        target_make.count("a3b/include/uapi/audio\\n") != 1):
-        raise RuntimeError("P472 A3b UAPI include roots not unique")
+    # Exact Makefile lines, not an escaped backslash-n substring.
+    # This audits the real compiler include path without weakening
+    # the requirement that every private donor UAPI root occur once.
+    flags=target_make.splitlines()
+    for root_flag in (
+        "subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi",
+        "subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi/audio",
+    ):
+        if flags.count(root_flag) != 1:
+            raise RuntimeError("P472 A3b UAPI include root count != 1: "+root_flag)
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
