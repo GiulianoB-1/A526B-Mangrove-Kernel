@@ -373,11 +373,11 @@ def stage(root,tg):
        '\t    (IS_ENABLED(CONFIG_P477_H3) && was_on)) {',
        'fail-closed H3 demotion for any unknown current code')
     s=once(s,
-       '    if (was_on || rc)\n',
+       '\tif (was_on || rc)\n',
        '#if IS_ENABLED(CONFIG_P477_H3)\n'
        '    fg->p477_h3_actual_ma=500;\n'
        '#endif\n'
-       '    if (was_on || rc)\n',
+       '\tif (was_on || rc)\n',
        "reset H3 tracking on H2 stop")
 
     s=once(s,
