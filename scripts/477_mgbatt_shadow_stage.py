@@ -47,9 +47,11 @@ def stage(root,tg,repo):
     # the single observed path; call the read-only logger even when OFF.
     anchor=("    unsigned long now=jiffies;\n"
             "    mutex_lock(&fg->a52h0_lock);\n"
+            "    p475_s2_log(fg);\n"
             "    /* Track ten consecutive seconds")
     replacement=("    unsigned long now=jiffies;\n"
                  "    mutex_lock(&fg->a52h0_lock);\n"
+                 "    p475_s2_log(fg);\n"
                  "#if IS_ENABLED(CONFIG_MGBATT_SHADOW)\n"
                  "    {\n"
                  "        int dt1;\n"
