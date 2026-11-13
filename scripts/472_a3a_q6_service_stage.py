@@ -297,6 +297,28 @@ def stage(root, tg):
         lsm_header.read_text(), "#include <linux/msm_ion.h>",
         "#include <linux/ion.h>", "LSM real ACK ION header",
     ))
+    # TG q6voice.c includes the 4.19 private socinfo header even though
+    # it calls none of that header's functions/macros. Do not copy a
+    # misleading 4.19 SOCINFO API or provide a fake implementation.
+    voice = dest / "dsp/q6voice.c"
+    voice_source = voice.read_text()
+    for symbol in ("socinfo_", "SOCINFO_", "of_board_is_",
+                   "early_machine_is_", "machine_is_"):
+        if symbol in voice_source.replace("#include <soc/qcom/socinfo.h>", ""):
+            raise RuntimeError("P472 A3a voice requires real SOCINFO port: " + symbol)
+    voice.write_text(one(
+        voice_source, "#include <soc/qcom/socinfo.h>\n", "",
+        "remove unused TG-only socinfo include",
+    ))
+
+    # q6voice.h uses the same genuine DMA-BUF/ION type definitions as
+    # the already adapted A2a headers. No heap IDs or allocation API
+    # is changed here.
+    voice_header = dest / "include/dsp/q6voice.h"
+    voice_header.write_text(one(
+        voice_header.read_text(), "#include <linux/msm_ion.h>",
+        "#include <linux/ion.h>", "voice real ACK ION header",
+    ))
     for srcname in HELPERS:
         source = donor / "dsp" / srcname
         target = dest / "dsp" / srcname
@@ -348,6 +370,13 @@ def check(root):
     if ("#include <linux/ion.h>" not in lsm_header or
             "#include <linux/msm_ion.h>" in lsm_header):
         raise RuntimeError("P472 A3a LSM must use real 5.10 ACK ION")
+    voice = (d / "dsp/q6voice.c").read_text()
+    voice_header = (d / "include/dsp/q6voice.h").read_text()
+    if "#include <soc/qcom/socinfo.h>" in voice:
+        raise RuntimeError("P472 A3a unused TG SOCINFO include remains")
+    if ("#include <linux/ion.h>" not in voice_header or
+            "#include <linux/msm_ion.h>" in voice_header):
+        raise RuntimeError("P472 A3a voice must use real 5.10 ACK ION")
     # Missing in generic ACK 5.10, these TG ABI definitions are scoped
     # only to Q6ASM. Prove the old userspace buffer prefix remains 32 bytes.
     compat = (d / "dsp/p472_a3a_q6asm_compress_compat.h").read_text()
