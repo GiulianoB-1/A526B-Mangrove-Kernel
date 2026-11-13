@@ -249,8 +249,8 @@ def check(root):
     s=(root/SRC).read_text()
     k=(root/K).read_text()
     assert s.count("P477_H3_SINGLE_WRITER_STEPPED_DCP_ONLY_V1")==1
-    assert s.count("config P477_H3")==1
-    assert s.count("config P477_H0_REARM_FIX")==1
+    assert k.count("config P477_H3")==1
+    assert k.count("config P477_H0_REARM_FIX")==1
     assert "default n" in k.split("config P477_H0_REARM_FIX",1)[1].split("config ",1)[0]
     scope=k.split("config P477_H3",1)[1].split("config ",1)[0]
     assert "depends on P476_H2 && P475_S2_CABLE" in scope and "default n" in scope
