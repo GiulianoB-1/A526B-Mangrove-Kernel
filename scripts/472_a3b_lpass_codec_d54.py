@@ -107,7 +107,7 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-$(CONFIG_P472_A3B_B1) += -DCONFIG_PINCTRL_WCD=1 -DCONFIG_PINCTRL_LPI=1 -DCONFIG_MSM_CDC_PINCTRL=1
 subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MACRO=1 -DCONFIG_TX_MACRO=1 -DCONFIG_VA_MACRO=1
-subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1
+subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1
 obj-y += soc/ asoc/
 '''
 
@@ -257,6 +257,26 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "asoc/codecs/wcd-mbhc-v2.c":
+        # FSA4480 is intentionally excluded from A3b (no actual
+        # FSA driver). The donor fallback header returns false
+        # success. Forbid entering that path when DT requests
+        # Type-C analog audio instead of silently accepting it.
+        old=(
+            "\tif (mbhc_cfg->enable_usbc_analog == 0 || rc != 0) {"
+        )
+        new=(
+            "\tif (mbhc_cfg->enable_usbc_analog &&\n"
+            "\t    !IS_ENABLED(CONFIG_QCOM_FSA4480_I2C)) {\n"
+            "\t\tdev_err(card->dev,\n"
+            "\t\t\t\"P472 A3b FSA4480 unavailable: Type-C analog rejected\\n\");\n"
+            "\t\treturn -EOPNOTSUPP;\n"
+            "\t}\n"
+            + old
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P472 A3b FSA4480 analog fail-closed gate drift")
+        data=data.replace(old,new,1)
     elif rel == "asoc/codecs/msm-cdc-pinctrl.c":
         # SM7325 5.4 uses downstream msm_gpio_mpm_wake_set() with a
         # private TLMM wake register API. ACK 5.10 pinctrl-msm.c has
@@ -325,6 +345,15 @@ def stage(root,tg,d54):
     # Entire private 5.4 header hierarchy stays sandboxed in a3b/include.
     # A3a includes and sources remain unchanged.
     shutil.copytree(donor/"include",target/"include")
+    # The donor's shared MBHC read macro is used by both WCD938x
+    # and wcd-mbhc-adc.c. Update its real MMIO-backed ASoC read,
+    # not the entire global GKI header hierarchy.
+    mbhc_header=target/"include/asoc/wcd-mbhc-v2.h"
+    mbhc_s=mbhc_header.read_text()
+    old_mbhc="snd_soc_component_read32("
+    if mbhc_s.count(old_mbhc)!=1:
+        raise RuntimeError("P472 A3b pinned MBHC register read macro drift")
+    mbhc_header.write_text(mbhc_s.replace(old_mbhc,"snd_soc_component_read(",1))
     # 5.4 downstream keeps these driver-required headers outside
     # techpack/audio/include. Stage pinned originals privately, never
     # edit global GKI include/ or invent ABI types/success stubs.
@@ -335,6 +364,7 @@ def stage(root,tg,d54):
         "include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
         "include/soc/qcom/pm.h",
         "include/dt-bindings/sound/audio-codec-port-types.h",
+        "include/linux/soc/qcom/fsa4480-i2c.h",
     )
     for rel in extra_headers:
         source=d54/rel
@@ -390,6 +420,7 @@ def check(root):
             raise RuntimeError("P472 A3b must be default off: "+cfg)
     for rel in ("include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
                 "include/dt-bindings/sound/audio-codec-port-types.h",
+                "include/linux/soc/qcom/fsa4480-i2c.h",
                 "include/soc/qcom/pm.h"):
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b pinned external header absent: "+rel)
@@ -492,6 +523,39 @@ def check(root):
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
+    # The MBHC macro must use the genuine ACK 5.10 ASoC register
+    # access, and its ADC initializer must resolve to the real object.
+    mbhc_shared=(target/"include/asoc/wcd-mbhc-v2.h").read_text()
+    if (mbhc_shared.count("snd_soc_component_read(")!=1 or
+        "snd_soc_component_read32(" in mbhc_shared or
+        mbhc_shared.count("#define WCD_MBHC_REG_READ(")!=1):
+        raise RuntimeError("P472 A3b shared real MBHC read macro ABI drift")
+    adc_header=(target/"asoc/codecs/wcd-mbhc-adc.h").read_text()
+    adc_impl=(target/"asoc/codecs/wcd-mbhc-adc.c").read_text()
+    adc_flags=[line for line in target_make.splitlines()
+               if line.startswith("subdir-ccflags-$(CONFIG_P472_A3B_B3) +=")]
+    if (len(adc_flags)!=1 or
+        adc_flags[0].split().count("-DCONFIG_SND_SOC_WCD_MBHC_ADC=1")!=1 or
+        adc_header.count("#if IS_ENABLED(CONFIG_SND_SOC_WCD_MBHC_ADC)")!=1 or
+        adc_impl.count("void wcd_mbhc_adc_init(struct wcd_mbhc *mbhc)")!=1 or
+        "wcd-mbhc-adc.o" not in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P472 A3b real MBHC ADC declaration/implementation missing")
+    # Stage original FSA4480 declarations only. No FSA driver, and
+    # a DT request for USB-C analog must fail with -EOPNOTSUPP.
+    fsa_header=(target/"include/linux/soc/qcom/fsa4480-i2c.h").read_text()
+    mbhc_core=(target/"asoc/codecs/wcd-mbhc-v2.c").read_text()
+    for required in (
+        "#include <linux/soc/qcom/fsa4480-i2c.h>",
+        "!IS_ENABLED(CONFIG_QCOM_FSA4480_I2C)",
+        "P472 A3b FSA4480 unavailable: Type-C analog rejected",
+        "return -EOPNOTSUPP;",
+    ):
+        if mbhc_core.count(required)!=1:
+            raise RuntimeError("P472 A3b FSA4480 fail-closed ABI missing: "+required)
+    if (fsa_header.count("#define FSA4480_I2C_H")!=1 or
+        fsa_header.count("int fsa4480_reg_notifier(")!=1 or
+        "fsa4480.o" in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P472 A3b FSA4480 original header/driver isolation drift")
     # Real 5.10 ASoC and CPU latency QoS APIs, not compat stubs.
     bolero=(target/"asoc/codecs/bolero/bolero-cdc.c").read_text()
     if (bolero.count("snd_soc_component_read(")!=2 or
