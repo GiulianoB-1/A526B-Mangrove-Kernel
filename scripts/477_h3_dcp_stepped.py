@@ -292,16 +292,30 @@ def stage(root,tg):
        '    }\n'+h0_anchor,"active H0 manual rearm")
 
     # Explicit H2 refusals must be observable, including current H0 state.
-    h2_anchor=('            strcmp(fg->a52h0_state,"CHARGING"))\n'
-               '            rc=-EPERM;')
+    h2_anchor=('\t\t    strcmp(fg->a52h0_state,"CHARGING"))\n'
+               '\t\t\trc=-EPERM;')
     s=once(s,h2_anchor,
-       '            strcmp(fg->a52h0_state,"CHARGING")) {\n'
+       '\t\t    strcmp(fg->a52h0_state,"CHARGING")) {\n'
        '            dev_warn(fg->dev,\n'
        '             "P476 H2 ARM_REFUSED state=%s active=%d armed=%d killed=%d latch=%d\\n",\n'
        '             fg->a52h0_state?fg->a52h0_state:"OFF",fg->a52h0_active,\n'
        '             fg->a52h0_armed,fg->a52h0_killed,fg->a52g_inhibit_latched);\n'
-       '            rc=-EPERM;\n'
+       '\t\t\trc=-EPERM;\n'
        '        }',"H2 refusal errno logging")
+
+    # Start the 60-second dwell from each manual H2 arm, not from boot.
+    h2_on=('\t\telse\n'
+           '\t\t\tfg->p476_h2_enabled=true;')
+    s=once(s,h2_on,
+       '\t\telse {\n'
+       '\t\t\tfg->p476_h2_enabled=true;\n'
+       '#if IS_ENABLED(CONFIG_P477_H3)\n'
+       '            fg->p477_h3_last_step=jiffies;\n'
+       '            p477_h3_reset_stable(fg,a52g_ntc_temp(fg),\n'
+       '                                 a52h_chg_ntc_temp(fg));\n'
+       '#endif\n'
+       '        }',
+       "H3 dwell begins on H2 explicit arm")
 
     # Every write including calls from old H0/H2 is bounded by the
     # existing sole writer, never a new unrestricted I2C call.
@@ -331,10 +345,6 @@ def stage(root,tg):
        '#endif\n'
        '\t/* A 2-second H0 guard pass and H0 CHARGING status are prerequisites. */',
        "route H2 timer to H3 only when selected")
-    s=once(s,
-       '    if (fg->p476_h2_fast || charge_reg==P476_H2_1000MA_CODE) {',
-       '    if (fg->p476_h2_fast || charge_reg==P476_H2_1000MA_CODE) {',
-       "preserve legacy H2 behavior") if False else s
     s=once(s,
        '    if (was_on || rc)\n',
        '#if IS_ENABLED(CONFIG_P477_H3)\n'
