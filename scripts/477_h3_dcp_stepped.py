@@ -260,7 +260,8 @@ def check(root):
                   'time_before(now,fg->p477_h3_last_step+P477_H3_STEP_INTERVAL)',
                   'vbus != 0x44', 'strcmp(type,"DCP")',
                   'a52h0_write_masked(fg,A52H0_CHGCNTL2,0xff,',
-                  'if(reg==A52H0_CHGCNTL2 && val>0x86)return -EPERM;'):
+                  'if(reg==A52H0_CHGCNTL2 && val>0x86)return -EPERM;',
+                  '(IS_ENABLED(CONFIG_P477_H3) && was_on)'):
         if piece not in s:
             raise RuntimeError("P477 missing audit marker/gate "+piece)
     assert 7+(1500000-109375)//15625 == 0x60
@@ -359,6 +360,14 @@ def stage(root,tg):
        '#endif\n'
        '\t/* A 2-second H0 guard pass and H0 CHARGING status are prerequisites. */',
        "route H2 timer to H3 only when selected")
+    # If H3 is armed, even an unexpected CHGCNTL2 value must be
+    # overwritten with verified 500 mA during OFF. Never silently
+    # accept unknown code while returning success from p476_h2_off.
+    s=once(s,
+       '\tif (fg->p476_h2_fast || charge_reg==P476_H2_1000MA_CODE) {',
+       '\tif (fg->p476_h2_fast || charge_reg==P476_H2_1000MA_CODE ||\n'
+       '\t    (IS_ENABLED(CONFIG_P477_H3) && was_on)) {',
+       'fail-closed H3 demotion for any unknown current code')
     s=once(s,
        '    if (was_on || rc)\n',
        '#if IS_ENABLED(CONFIG_P477_H3)\n'
