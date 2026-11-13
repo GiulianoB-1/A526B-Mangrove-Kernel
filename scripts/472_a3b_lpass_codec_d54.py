@@ -242,6 +242,21 @@ def adapt_510_api(rel,data):
             if data.count(old_body)!=1:
                 raise RuntimeError("P472 A3b RX mute body donor drift")
             data=data.replace(old_body,new_body,1)
+    elif rel in (
+        "asoc/codecs/wcd938x/wcd938x.c",
+        "asoc/codecs/wcd938x/wcd938x-mbhc.c",
+    ):
+        # Exact 5.4 WCD938x register reads; ACK 5.10 returns the
+        # same unsigned int via snd_soc_component_read(). Do not
+        # replace these hardware reads or synthesize success values.
+        expected={
+            "asoc/codecs/wcd938x/wcd938x.c":10,
+            "asoc/codecs/wcd938x/wcd938x-mbhc.c":13,
+        }[rel]
+        old="snd_soc_component_read32("
+        if data.count(old)!=expected or "snd_soc_component_read(" in data:
+            raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
+        data=data.replace(old,"snd_soc_component_read(")
     elif rel == "soc/swr-mstr-ctrl.c":
         # 5.10 CPU_IDLE split the old PM_QOS_CPU_DMA_LATENCY class
         # out into cpu_latency_qos_* functions. This preserves a real
@@ -289,6 +304,7 @@ def stage(root,tg,d54):
     extra_headers = (
         "include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
         "include/soc/qcom/pm.h",
+        "include/dt-bindings/sound/audio-codec-port-types.h",
     )
     for rel in extra_headers:
         source=d54/rel
@@ -343,12 +359,21 @@ def check(root):
         if "default n" not in scope:
             raise RuntimeError("P472 A3b must be default off: "+cfg)
     for rel in ("include/dt-bindings/sound/qcom,bolero-clk-rsc.h",
+                "include/dt-bindings/sound/audio-codec-port-types.h",
                 "include/soc/qcom/pm.h"):
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b pinned external header absent: "+rel)
     clk = (target/"include/dt-bindings/sound/qcom,bolero-clk-rsc.h").read_text()
     if clk.count("#define MAX_CLK\t8") != 1:
         raise RuntimeError("P472 A3b donor Bolero clock resource constants drift")
+    port_types=(target/"include/dt-bindings/sound/audio-codec-port-types.h").read_text()
+    if (port_types.count("#define HPH_L 9")!=1 or
+        port_types.count("#define MBHC 17")!=1 or
+        port_types.count("#define SWRM_RX_PCM_IN 47")!=1):
+        raise RuntimeError("P472 A3b WCD938x 5.4 DT port ID constants drift")
+    wcd_main=(target/"asoc/codecs/wcd938x/wcd938x.c").read_text()
+    if wcd_main.count("#include <dt-bindings/sound/audio-codec-port-types.h>")!=1:
+        raise RuntimeError("P472 A3b WCD938x real DT port binding missing")
     pm = (target/"include/soc/qcom/pm.h").read_text()
     if (pm.count("msm_cpuidle_get_deep_idle_latency(void)") != 2 or
             "#include <linux/cpuidle.h>" not in pm):
@@ -382,6 +407,15 @@ def check(root):
     if (bolero.count("snd_soc_component_read(")!=2 or
         "snd_soc_component_read32(" in bolero):
         raise RuntimeError("P472 A3b Bolero 5.10 ASoC codec-ID reads missing")
+    # WCD938x codec/MBHC real register reads use the 5.10 ASoC ABI.
+    for rel,expected in (
+        ("asoc/codecs/wcd938x/wcd938x.c",10),
+        ("asoc/codecs/wcd938x/wcd938x-mbhc.c",13),
+    ):
+        source=(target/rel).read_text()
+        if (source.count("snd_soc_component_read(")!=expected or
+            "snd_soc_component_read32(" in source):
+            raise RuntimeError("P472 A3b WCD938x 5.10 codec read ABI drift: "+rel)
     # All three real Bolero macro I/O paths use ACK 5.10 ASoC APIs.
     for rel,expected in (
         ("asoc/codecs/bolero/rx-macro.c",38),
