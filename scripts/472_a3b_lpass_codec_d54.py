@@ -164,6 +164,48 @@ def add_enumeration(rel,src):
     return one(src,anchor,injection+"\treturn 0;\nerr_mstr_init_fail:",
                "SWR hardware slave count")
 
+def adapt_510_api(rel,data):
+    """Pin exact 5.4->ACK 5.10 API conversions, reject donor drift.
+
+    Android Common Kernel android12-5.10:
+      include/sound/soc-component.h:340 has snd_soc_component_read()
+      include/linux/pm_qos.h:26,61,147-163 has CPU latency QoS API.
+    Donor @c4cb0a97:
+      bolero-cdc.c:1211-1214 reads two real codec ID registers.
+      swr-mstr-ctrl.c:2867-2869 registers CPU DMA latency request.
+      swr-mstr-ctrl.c:3035,3071 removes request; :3786,3822 updates.
+    """
+    if rel == "asoc/codecs/bolero/bolero-cdc.c":
+        # Identical read return type/register access. No fake codec IDs.
+        old="snd_soc_component_read32("
+        if data.count(old) != 2 or "snd_soc_component_read(" in data:
+            raise RuntimeError("P472 A3b Bolero ASoC read API donor drift")
+        data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "soc/swr-mstr-ctrl.c":
+        # 5.10 CPU_IDLE split the old PM_QOS_CPU_DMA_LATENCY class
+        # out into cpu_latency_qos_* functions. This preserves a real
+        # kernel QoS request over its full add/update/remove lifetime.
+        old="\tpm_qos_add_request(&swrm->pm_qos_req,\n" \
+            "\t\t\t   PM_QOS_CPU_DMA_LATENCY,\n" \
+            "\t\t\t   PM_QOS_DEFAULT_VALUE);"
+        new="\tcpu_latency_qos_add_request(&swrm->pm_qos_req,\n" \
+            "\t\t\t   PM_QOS_DEFAULT_VALUE);"
+        if data.count(old)!=1:
+            raise RuntimeError("P472 A3b SWR CPU latency add ABI drift")
+        data=data.replace(old,new,1)
+        for old_name,new_name,count in (
+            ("pm_qos_update_request(", "cpu_latency_qos_update_request(", 2),
+            ("pm_qos_remove_request(", "cpu_latency_qos_remove_request(", 2),
+        ):
+            if data.count(old_name)!=count or new_name in data:
+                raise RuntimeError("P472 A3b SWR CPU latency lifecycle donor drift: "+old_name)
+            data=data.replace(old_name,new_name)
+        if data.count("#include <linux/pm_qos.h>")!=1:
+            raise RuntimeError("P472 A3b SWR 5.4 pm_qos header not present")
+        # Keep struct pm_qos_request, which remains the real ACK 5.10 ABI.
+    return data
+
+
 def stage(root,tg,d54):
     for repo,pin,label in ((tg,TG_SHA,"TouchGrass"),(d54,D54_SHA,"5.4 donor")):
         have=subprocess.check_output(["git","-C",str(repo),"rev-parse","HEAD"],
@@ -200,6 +242,7 @@ def stage(root,tg,d54):
         dest=target/rel
         dest.parent.mkdir(parents=True,exist_ok=True)
         data=(donor/rel).read_text()
+        data=adapt_510_api(rel,data)
         if rel in PROBES:data=add_probe_logger(rel,data)
         data=add_enumeration(rel,data)
         dest.write_text(data)
@@ -251,6 +294,23 @@ def check(root):
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
+    # Real 5.10 ASoC and CPU latency QoS APIs, not compat stubs.
+    bolero=(target/"asoc/codecs/bolero/bolero-cdc.c").read_text()
+    if (bolero.count("snd_soc_component_read(")!=2 or
+        "snd_soc_component_read32(" in bolero):
+        raise RuntimeError("P472 A3b Bolero 5.10 ASoC codec-ID reads missing")
+    swr=(target/"soc/swr-mstr-ctrl.c").read_text()
+    for symbol,n in (
+        ("cpu_latency_qos_add_request(",1),
+        ("cpu_latency_qos_update_request(",2),
+        ("cpu_latency_qos_remove_request(",2),
+    ):
+        if swr.count(symbol)!=n:
+            raise RuntimeError("P472 A3b real 5.10 QoS lifecycle missing: "+symbol)
+    for old in ("pm_qos_add_request(", "pm_qos_update_request(",
+                "pm_qos_remove_request(", "PM_QOS_CPU_DMA_LATENCY"):
+        if old in swr:
+            raise RuntimeError("P472 A3b legacy 5.4 QoS API remains: "+old)
     for rel,(fn,part,kind) in PROBES.items():
         source=(target/rel).read_text()
         marker=f"P472 A3b PART {part} probe rc=%d"
