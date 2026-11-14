@@ -257,6 +257,15 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "asoc/codecs/wcd-mbhc-adc.c":
+        # SM7325 ADC code uses no symbols from legacy pdata.h. That
+        # header imports linux/slimbus/slimbus.h when WDSP codec-core
+        # is enabled. Keep the SoundWire ADC and its register I/O,
+        # without importing the legacy SLIMbus data structure.
+        old="#include <asoc/pdata.h>\n"
+        if data.count(old)!=1:
+            raise RuntimeError("P472 A3b ADC unused legacy pdata header drift")
+        data=data.replace(old,"",1)
     elif rel == "asoc/codecs/wcd-mbhc-v2.c":
         # FSA4480 is intentionally excluded from A3b (no actual
         # FSA driver). The donor fallback header returns false
@@ -572,6 +581,15 @@ def check(root):
             raise RuntimeError("P472 A3b real WCD MBHC implementation drift: "+token)
     if "wcd-mbhc-v2.o" not in (target/"asoc/codecs/Makefile").read_text():
         raise RuntimeError("P472 A3b real WCD MBHC object missing")
+    # Keep the full MBHC ADC path while isolating the unrelated
+    # legacy SLIMbus pdata header. The pinned SM7325 code uses no
+    # symbol from pdata.h in this translation unit.
+    adc_source=(target/"asoc/codecs/wcd-mbhc-adc.c").read_text()
+    if ("#include <asoc/pdata.h>" in adc_source or
+        "linux/slimbus/slimbus.h" in adc_source or
+        adc_source.count("void wcd_mbhc_adc_init(struct wcd_mbhc *mbhc)")!=1 or
+        adc_source.count("WCD_MBHC_REG_READ(")!=22):
+        raise RuntimeError("P472 A3b MBHC ADC / legacy SLIMbus isolation drift")
     # The MBHC macro must use the genuine ACK 5.10 ASoC register
     # access, and its ADC initializer must resolve to the real object.
     mbhc_shared=(target/"include/asoc/wcd-mbhc-v2.h").read_text()
