@@ -39,8 +39,8 @@ void mgbatt_shadow_tick(struct device *owner, const char *type,
 	if(!ready) goto out;
 	index=mgbatt_cable_index(type);
 	/* Real DCP default must be verified, not assumed from MUIC. */
-	if(index==2 &&
-	   (policy.cable[2].icl_ma!=1800 || policy.cable[2].fcc_ma!=2100))
+	if(index==3 &&
+	   (policy.cable[3].icl_ma!=1800 || policy.cable[3].fcc_ma!=2100))
 		index=-1;
 	report=(muic_dev1!=last_dev1 || index!=last_index ||
 		time_after_eq(jiffies,last_report+60*HZ));

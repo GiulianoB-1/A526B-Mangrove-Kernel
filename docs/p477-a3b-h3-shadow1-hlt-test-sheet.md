@@ -1,9 +1,9 @@
-# P477 A3b + H3 + MGBATT SHADOW1, HLT-only candidate
+# P477B r02 pinctrl + H3 + MGBATT SHADOW1, HLT-only candidate
 
 ## Proven parent and hard rules
 
 - Hardware-proven parent: `7eef0129f4c685aabdc815cca3024c7125ec241c`, `MANGROVE-P472-A3A-Q6-HLT-H2-NO-ARM.boot.img`.
-- This build MUST produce just `MANGROVE-P477-A3B-H3-SHADOW1-NO-ARM.boot.img` in its primary flash artifact. The internal `nohlt=1` comparison must never be uploaded.
+- This build MUST produce just `MANGROVE-P477B-A3B-FIX-NO-ARM.boot.img` in its primary flash artifact. The internal `nohlt=1` comparison must never be uploaded.
 - Keep the tested parent boot available for recovery. No automated flash or runtime charging ARM.
 - TG @ `6bf351bdf18bdb228db79e66f14a7a9c0178e5d7`; Samsung SM7325 5.4 API donor @ `c4cb0a9783fcfb8d17ddda02c0ad1678dcd0dac4`.
 
@@ -81,3 +81,9 @@ The shadow computes observed TG base cable and basic temperature caps but does n
 ## E. Failure policy
 
 Hardware regression: stop, restore the tested `7eef012` parent. For the next build disable `CONFIG_MGBATT_SHADOW` first, then A3b B3/B2/B1, while preserving charger A fixes. Do not publish success until full native link, exact HLT packaging and real on-device boot/charger/codec tests pass.
+
+## P477B hardware fixes and acceptance
+
+Start from hardware-tested 683ad03. Fix A52 r02 `qcom,num-gpios` (fallback `qcom,gpios-count`), early real CDC pinctrl registration at `subsys_initcall` (no old SLIMbus/I2C WCD core), and `qcom,tlmm-gpio` (fallback `qcom,tlmm-pins`, bounded array). Shadow-only cable mapping is SDP=4, DCP=3, CDP=5; DCP checks the live cable[3] TA defaults. H3/HLT/NO ARM unchanged.
+
+CI runs `scripts/477b_dt_contract_audit.py` on all staged A3b donor source property reads, against pinned TG 4.19 and A52 r02 DTS. Optional exceptions are explicit; missing calls to staged `*_drv_init()` are fatal. On hardware require LPI_PINCTRL rc=0, CDC_PINCTRL per-node rc=0, RX/TX rc=0, real SWR enumeration and WCD938x SWR slave binding, without WCD sleep failures. Record actual results; a successful build is not hardware validation.

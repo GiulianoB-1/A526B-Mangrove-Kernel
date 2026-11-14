@@ -75,7 +75,7 @@ SUB_MAKE = {
     "asoc/Makefile":
         "obj-y += codecs/\n",
     "asoc/codecs/Makefile":
-        "obj-$(CONFIG_P472_A3B_B1) += msm-cdc-pinctrl.o msm-cdc-supply.o audio-ext-clk-up.o\n"
+        "obj-$(CONFIG_P472_A3B_B1) += a3b-cdc-pinctrl-init.o msm-cdc-pinctrl.o msm-cdc-supply.o audio-ext-clk-up.o\n"
         "obj-$(CONFIG_P472_A3B_B2) += bolero/\n"
         "obj-$(CONFIG_P472_A3B_B3) += wcd938x/ wcd-mbhc-v2.o wcd-mbhc-adc.o wcd-clsh.o wcd-irq.o wcd9xxx-soc-init.o wcd-dsp-utils.o wcd-dsp-mgr.o wcdcal-hwdep.o\n",
     "asoc/codecs/bolero/Makefile":
@@ -110,6 +110,8 @@ subdir-ccflags-$(CONFIG_P472_A3B_B2) += -DCONFIG_SND_SOC_BOLERO=1 -DCONFIG_RX_MA
 subdir-ccflags-$(CONFIG_P472_A3B_B3) += -DCONFIG_SOUNDWIRE=1 -DCONFIG_SOUNDWIRE_WCD_CTRL=1 -DCONFIG_SOUNDWIRE_MSTR_CTRL=1 -DCONFIG_SND_SOC_WCD938X=1 -DCONFIG_SND_SOC_WCD938X_SLAVE=1 -DCONFIG_WCD9XXX_CODEC_CORE_V2=1 -DCONFIG_SND_SOC_WCD9XXX_V2=1 -DCONFIG_SND_SOC_WCD_MBHC_ADC=1 -DCONFIG_SND_SOC_WCD_MBHC=1 -DCONFIG_WCD9XXX_CODEC_CORE=1
 obj-y += soc/ asoc/
 '''
+
+CDC_INIT_SOURCE = "// SPDX-License-Identifier: GPL-2.0-only\n/* P477B: register the real CDC pinctrl before codec device_initcalls.\n * No legacy SLIMbus/I2C WCD9xxx IRQ or core is registered.\n */\n#include <linux/init.h>\n#include <linux/printk.h>\n#include <asoc/msm-cdc-pinctrl.h>\nstatic int __init p472_a3b_cdc_pinctrl_init(void)\n{\n\tint rc = msm_cdc_pinctrl_drv_init();\n\n\tpr_info(\"P472 A3b CDC_PINCTRL register rc=%d\\n\", rc);\n\treturn rc;\n}\nsubsys_initcall(p472_a3b_cdc_pinctrl_init);\n"
 
 def one(s,a,b,label):
     n=s.count(a)
@@ -257,6 +259,60 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "soc/pinctrl-lpi.c":
+        # TG 4.19 and A52 r02 specify qcom,num-gpios=15.
+        old=(
+            '\tret = of_property_read_u32(dev->of_node, "qcom,gpios-count", &npins);\n'
+            '\tif (ret < 0)\n\t\treturn ret;'
+        )
+        new=(
+            '\t{\n'
+            '\t\tconst char *used = "qcom,num-gpios";\n'
+            '\t\tret = of_property_read_u32(dev->of_node, "qcom,num-gpios", &npins);\n'
+            '\t\tif (ret && !of_find_property(dev->of_node, "qcom,num-gpios", NULL)) {\n'
+            '\t\t\tused = "qcom,gpios-count";\n'
+            '\t\t\tret = of_property_read_u32(dev->of_node, "qcom,gpios-count", &npins);\n'
+            '\t\t}\n'
+            '\t\tdev_info(dev, "P472 A3b LPI_GPIO_PROP %s count=%u rc=%d\\n",\n'
+            '\t\t\t used, ret ? 0 : npins, ret);\n'
+            '\t\tif (ret < 0)\n\t\t\treturn ret;\n'
+            '\t}'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P477B LPI GPIO property donor drift")
+        data=data.replace(old,new,1)
+    elif rel == "soc/pinctrl-wcd.c":
+        # The TG WCD pinctrl provider uses the same A52 r02 key.
+        old=(
+            '\tret = of_property_read_u32(dev->of_node, "qcom,gpios-count", &npins);\n'
+            '\tif (ret) {\n'
+            '\t\tdev_err(dev, "%s: Looking up %s property in node %s failed\\n",\n'
+            '\t\t\t__func__, "qcom,gpios-count", dev->of_node->full_name);\n'
+            '\t\tret = -EINVAL;\n'
+            '\t\tgoto err_priv_alloc;\n'
+            '\t}'
+        )
+        new=(
+            '\t{\n'
+            '\t\tconst char *used = "qcom,num-gpios";\n'
+            '\t\tret = of_property_read_u32(dev->of_node, "qcom,num-gpios", &npins);\n'
+            '\t\tif (ret && !of_find_property(dev->of_node, "qcom,num-gpios", NULL)) {\n'
+            '\t\t\tused = "qcom,gpios-count";\n'
+            '\t\t\tret = of_property_read_u32(dev->of_node, "qcom,gpios-count", &npins);\n'
+            '\t\t}\n'
+            '\t\tdev_info(dev, "P472 A3b WCD_GPIO_PROP %s count=%u rc=%d\\n",\n'
+            '\t\t\t used, ret ? 0 : npins, ret);\n'
+            '\t\tif (ret) {\n'
+            '\t\t\tdev_err(dev, "%s: Looking up %s in %s failed\\n",\n'
+            '\t\t\t\t__func__, used, dev->of_node->full_name);\n'
+            '\t\t\tret = -EINVAL;\n'
+            '\t\t\tgoto err_priv_alloc;\n'
+            '\t\t}\n'
+            '\t}'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P477B WCD GPIO property donor drift")
+        data=data.replace(old,new,1)
     elif rel == "soc/swr-wcd-ctrl.c":
         # The 5.4 donor has two distinct real SWR master drivers,
         # qcom,swr-wcd and qcom,swr-mstr, both exporting the same
@@ -392,6 +448,41 @@ def adapt_510_api(rel,data):
         if data.count(old_call)!=1:
             raise RuntimeError("P472 A3b CDC downstream GPIO wake call drift")
         data=data.replace(old_call,new_call,1)
+        # r02 GPIO wake property. Legacy key is a fallback only if absent.
+        old_tlmm=(
+            'cdc_tlmm_gpio:\n'
+            '\tcount = of_property_count_u32_elems(pdev->dev.of_node, "qcom,tlmm-pins");\n'
+            '\tif (count <= 0)\n'
+            '\t\tgoto cdc_rst;\n'
+            '\tif (!of_property_read_u32_array(pdev->dev.of_node, "qcom,tlmm-pins",\n'
+        )
+        new_tlmm=(
+            'cdc_tlmm_gpio:\n'
+            '\t{\n'
+            '\t\tconst char *used = "qcom,tlmm-gpio";\n'
+            '\t\tcount = of_property_count_u32_elems(pdev->dev.of_node, "qcom,tlmm-gpio");\n'
+            '\t\tif (count <= 0 &&\n'
+            '\t\t    !of_find_property(pdev->dev.of_node, "qcom,tlmm-gpio", NULL)) {\n'
+            '\t\t\tused = "qcom,tlmm-pins";\n'
+            '\t\t\tcount = of_property_count_u32_elems(pdev->dev.of_node, "qcom,tlmm-pins");\n'
+            '\t\t}\n'
+            '\t\tdev_info(&pdev->dev, "P472 A3b CDC_TLMM_PROP %s count=%d\\n", used, count);\n'
+            '\t\tif (count <= 0)\n'
+            '\t\t\tgoto cdc_rst;\n'
+            '\t\tif (count > ARRAY_SIZE(tlmm_gpio)) {\n'
+            '\t\t\tdev_err(&pdev->dev, "CDC TLMM count %d exceeds %zu\\n",\n'
+            '\t\t\t\tcount, ARRAY_SIZE(tlmm_gpio));\n'
+            '\t\t\tret = -EINVAL;\n'
+            '\t\t\tgoto err_lookup_state;\n'
+            '\t\t}\n'
+            '\t\tif (!of_property_read_u32_array(pdev->dev.of_node, used,\n'
+        )
+        old_end='\t\tgpio_data->count = count;\n\t}\n\ncdc_rst:'
+        new_end='\t\tgpio_data->count = count;\n\t\t}\n\t}\n\ncdc_rst:'
+        if data.count(old_tlmm)!=1 or data.count(old_end)!=1:
+            raise RuntimeError("P477B CDC TLMM property donor drift")
+        data=data.replace(old_tlmm,new_tlmm,1)
+        data=data.replace(old_end,new_end,1)
     # Independent adaptation: the SWR master also needs 5.10 CPU latency QoS.
     # Do not chain this as `elif`: the earlier SWR dispatch branch already
     # matches this exact translation unit.
@@ -495,6 +586,7 @@ def stage(root,tg,d54):
         dest=target/path
         dest.parent.mkdir(parents=True,exist_ok=True)
         dest.write_text(txt)
+    (target/"asoc/codecs/a3b-cdc-pinctrl-init.c").write_text(CDC_INIT_SOURCE)
     (target/"Makefile").write_text(ROOT_MAKE)
     qmk=root/ROOT/"Makefile"
     qmk.write_text(one(qmk.read_text(),"obj-y += dsp/ soc/ ipc/",
@@ -595,6 +687,25 @@ def check(root):
     if ("msm_gpio_mpm_wake_set(" in cdc_510 or
             "#include <linux/pinctrl/qcom-pinctrl.h>" in cdc_510):
         raise RuntimeError("P472 A3b unsupported 5.4 GPIO wake API survived")
+    # P477B source contracts from TG 4.19 and A52 r02:
+    for rel,prop,mark in (
+        ("soc/pinctrl-lpi.c","qcom,num-gpios","P472 A3b LPI_GPIO_PROP"),
+        ("soc/pinctrl-wcd.c","qcom,num-gpios","P472 A3b WCD_GPIO_PROP"),
+        ("asoc/codecs/msm-cdc-pinctrl.c","qcom,tlmm-gpio","P472 A3b CDC_TLMM_PROP"),
+    ):
+        source=(target/rel).read_text()
+        if source.count(mark)!=1 or source.count('"'+prop+'"')<2:
+            raise RuntimeError("P477B A52 r02 pinctrl property drift: "+rel)
+    init=(target/"asoc/codecs/a3b-cdc-pinctrl-init.c").read_text()
+    if (init.count("msm_cdc_pinctrl_drv_init();")!=1 or
+        init.count("subsys_initcall(p472_a3b_cdc_pinctrl_init);")!=1 or
+        init.count("P472 A3b CDC_PINCTRL register rc=%d")!=1 or
+        "a3b-cdc-pinctrl-init.o" not in (target/"asoc/codecs/Makefile").read_text()):
+        raise RuntimeError("P477B early real CDC pinctrl driver missing")
+    for legacy in ("wcd9xxx_irq_drv_init(", "wcd9xxx_init(",
+                   "wcd9xxx-core-init.o"):
+        if legacy in init or legacy in (target/"asoc/codecs/Makefile").read_text():
+            raise RuntimeError("P477B legacy WCD9xxx core/IRQ registration forbidden")
     # WCD938x must use real IRQ and Class-H implementations. The
     # SM7325 5.4 fallback headers contain malformed/no-op stubs, while
     # B3 intentionally builds wcd-irq.c and wcd-clsh.c. Select their

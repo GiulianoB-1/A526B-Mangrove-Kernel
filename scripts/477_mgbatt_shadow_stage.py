@@ -105,6 +105,19 @@ def check(root):
                  "for(i=0;i<len;i++)", "number>=MGBATT_MAX_CABLES",
                  "return -EPERM;", "battery,chg_float_voltage"):
         if line not in code:raise RuntimeError("MGBATT source gate missing "+line)
+    # r02 shadow indexes: SDP=USB(4), DCP=TA(3), CDP=USB_CDP(5).
+    cable=(root/SHADOW/"mgbatt_cable.c").read_text()
+    shadow=(root/SHADOW/"mgbatt_shadow.c").read_text()
+    for needle in ('if(!strcmp(type,"SDP")) return 4;',
+                   'if(!strcmp(type,"DCP")) return 3;',
+                   'if(!strcmp(type,"CDP")) return 5;'):
+        if cable.count(needle)!=1:
+            raise RuntimeError("MGBATT SEC_BATTERY cable index drift: "+needle)
+    if ("if(index==3 &&" not in shadow or
+        "policy.cable[3].icl_ma!=1800" not in shadow or
+        "policy.cable[3].fcc_ma!=2100" not in shadow or
+        "policy.cable[2].icl_ma" in shadow):
+        raise RuntimeError("MGBATT DCP must validate TA index 3")
     for bad in ("i2c_smbus_write_", "i2c_transfer(", "regmap_write(",
                 "regmap_update_bits(", "power_supply_register(",
                 "devm_power_supply_register(", "i2c_new_client_device(",
