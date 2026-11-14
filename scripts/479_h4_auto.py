@@ -214,7 +214,7 @@ static void p479_h4_pre_tick(struct a52d_fg *fg)
     a52h0_state(fg,"ARMED","P479_H4_CABLE_REARM");
 }
 /* Invoked after H0 verification and only inside its 2s guard worker. */
-static void p479_h4_tick(struct a52d_fg *fg, int bat, int chg)
+static noinline void p479_h4_tick(struct a52d_fg *fg, int bat, int chg)
 {
     int icl=500,fcc=500,actual,target,step,rc;
     const char *type = fg->p479_h4_type;
@@ -489,6 +489,9 @@ def check(root):
                    "P479 H4 ICL_SET ma=%d code=0x%02x readback=0x%02x rc=%d",
                    "P479 H4 FCC_SET ma=%d code=0x%02x readback=0x%02x rc=%d",
                    "P479 H4 LIMIT ma=%d reason=%s",
+                   "P479 H4 LIMIT ma=500 reason=%s",
+                   "static noinline void p479_h4_tick(",
+                   "p479_h4_tick(fg,bat,chg);",
                    "P479 H4 FAULT reason=%s",
                    "reg==A52H0_VBUSCNTL && mask!=0x7f",
                    "val>0x44", "p479_h4_pre_tick(fg)",
