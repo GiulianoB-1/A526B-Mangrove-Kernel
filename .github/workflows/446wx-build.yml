@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P479 H4/shadow3/CDC-wake HLT (A3c native pending, NO ARM)
+run-name: P480 A3c native sound card and P479 fallback HLT (NO ARM)
 on:
   push:
     branches:
@@ -46,6 +46,7 @@ on:
       - agent/p476-h2-only-a2a-hlt-no-arm
       - agent/p472-a3a-q6-services-from-p476-h2-hlt-no-arm
       - agent/p479-h4-shadow3-cdc-wake-no-arm
+      - agent/p480-a3c-card-from-p479-hlt-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -134,7 +135,7 @@ jobs:
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
           python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py scripts/471_d1_datarmnet_stage.py scripts/471_d1_tg_netfilter_audit.py scripts/473_b1_probe_guard.py scripts/473_b2_se1_pinctrl.py scripts/473_b3_se1_baud.py scripts/472_a0_native.py scripts/472_a1_hdr32_gate.py scripts/472_a1_tg_donor_inventory.py scripts/472_a1_dispatch_stage.py scripts/472_a1_provenance.py scripts/472_a1_tg_native.py
           # Catch P472 A3b LPASS generator syntax errors before any kernel build.
-          python3 -m py_compile scripts/472_a3b_lpass_codec_d54.py scripts/479_h4_auto.py scripts/479_mgbatt_shadow3.py
+          python3 -m py_compile scripts/472_a3b_lpass_codec_d54.py scripts/479_h4_auto.py scripts/479_mgbatt_shadow3.py scripts/480_a3c_native.py
           python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py scripts/470_a6d_ipa_fw_smmu_cb.py scripts/470_a6e_ipa_clients_ready.py scripts/470_a6e_map_initcall_audit.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
@@ -2278,7 +2279,7 @@ jobs:
               raise SystemExit("P476: nohlt must be absent and every pair invariant must PASS")
           print("P476 BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
           P476_HLT_GATE
-          echo 'P479 H4-only HLT: H0/P449/H2/H3, MGBATT stage3, A3b wake fix. H4 sysfs default OFF. A3c FE/BE providers NOT ported, so NO A3c image is claimed. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P480 fallback inherits P479 H4-only HLT: H0/P449/H2/H3, MGBATT stage3, A3b wake fix. H4 sysfs default OFF. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
@@ -2306,6 +2307,103 @@ jobs:
           PY
           echo 'P470-A3 built-in native Image link PASS, but PAS15/DTB/SSR/modem-ready NOT READY; NO FLASH' | tee -a "$LOG"
           echo 'P470-A3 native built-in Image link PASS. This is not a boot artifact and is not flashable.' >> "$GITHUB_STEP_SUMMARY"
+          # P480: preserve a byte-identical P479 HLT fallback before adding
+          # the real A3c provider source to the separate native build.
+          cp phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img \
+            phase447b-variants/MANGROVE-P480-NO-A3C-HLT.boot.img
+          cp "$BUILD/arch/arm64/boot/Image" phase447-inventory/P480-NO-A3C.Image
+          cp "$BUILD/.config" phase447-inventory/P480-NO-A3C.config
+          if strings -a phase447-inventory/P480-NO-A3C.Image | grep -F 'P480 A3c '; then
+            echo '::error title=P480 fallback::Unexpected native A3c marker in P479 fallback'
+            exit 1
+          fi
+          # Stage pinned 5.4/5.10-shaped real PCM, compress, DAI, routing,
+          # stub codec and the Kona machine. No TAS/WSA/voice components.
+          python3 scripts/480_a3c_native.py \
+            --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --d54 "$PWD/workspace/sm7325-d54" \
+            --report phase447-inventory/P480-A3C-LINK-INVENTORY.json
+          python3 scripts/480_a3c_native.py --root "$ROOT" --check-only
+          "$ROOT/scripts/config" --file "$BUILD/.config" --enable P480_A3C
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 olddefconfig
+          grep -Fxq 'CONFIG_P480_A3C=y' "$BUILD/.config" || {
+            echo '::error title=P480::Native A3c Kconfig not enabled'; exit 1
+          }
+          grep -Fxq 'CONFIG_P479_H4=y' "$BUILD/.config" || {
+            echo '::error title=P480::Inherited H4 unexpectedly disabled'; exit 1
+          }
+          # Abort on real compile/link error, do not manufacture symbols or
+          # fabricate the ALSA card/PCM/compress counts.
+          make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image
+          python3 scripts/480_a3c_native.py --root "$ROOT" --check-only
+          for marker in \
+              'P480 A3c PART ' \
+              'P480 A3c CARD register rc=%d name=%s links=%d skipped=%d' \
+              'P480 A3c LINK_SKIPPED name=%s reason=%s' \
+              'P480 A3c DEVICES pcm=%d compress=%d'; do
+            strings -a "$BUILD/arch/arm64/boot/Image" | grep -Fq "$marker" || {
+              echo "::error title=P480::Real linked A3c marker missing::$marker"
+              exit 1
+            }
+          done
+          # The strings proof is from decompressed, uncompressed ARM64
+          # kernel Image, not raw gzip bytes in the boot-v2 container.
+          strings -a "$BUILD/arch/arm64/boot/Image" |
+            grep -F 'P480 A3c ' > phase447-inventory/P480-A3C-STRINGS.txt
+          if strings -a phase447-inventory/P480-NO-A3C.Image |
+             grep -Fq 'P480 A3c '; then
+            echo '::error title=P480::Fallback unexpectedly contains A3c'
+            exit 1
+          fi
+          gzip -n -9 -c "$BUILD/arch/arm64/boot/Image" \
+            > phase447-inventory/P480-A3C-Image.gz
+          python3 scripts/38_repack_a52_p1_boot.py \
+            --source "$ORIGINAL_BOOT" \
+            --kernel phase447-inventory/P480-A3C-Image.gz \
+            --output phase447-inventory/P480-INTERNAL-NOHLT-DO-NOT-FLASH.boot.img \
+            --report phase447-inventory/P480-A3C-REPACK.json
+          python3 scripts/474_hlt_pair.py \
+            --normal phase447-inventory/P480-INTERNAL-NOHLT-DO-NOT-FLASH.boot.img \
+            --hlt phase447b-variants/MANGROVE-P480-A3C-HLT.boot.img \
+            --image "$BUILD/arch/arm64/boot/Image" \
+            --report phase447-inventory/P480-A3C-HLT-PAIR.json
+          python3 - <<'P480_HLT_GATE'
+          from pathlib import Path
+          import json
+          d=json.loads(Path("phase447-inventory/P480-A3C-HLT-PAIR.json").read_text())
+          assert d.get("status")=="CMDLINE_ONLY_PEER_VERIFIED"
+          assert d.get("hlt_nohlt")==0 and d.get("normal_nohlt")==1
+          assert all(d.get("invariants",{}).values())
+          assert not any(t=="nohlt" or t.startswith("nohlt=")
+                         for t in d.get("hlt_cmdline","").split())
+          print("P480 HLT pair PASS: A3c and fallback both no nohlt")
+          P480_HLT_GATE
+          {
+            printf 'P480 run_id=%s commit=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            sha256sum phase447b-variants/MANGROVE-P480-NO-A3C-HLT.boot.img
+            sha256sum phase447b-variants/MANGROVE-P480-A3C-HLT.boot.img
+            sha256sum phase447-inventory/P480-NO-A3C.Image "$BUILD/arch/arm64/boot/Image"
+          } > phase447-inventory/P480-A3C-DUAL-HLT-PROVENANCE.txt
+          echo 'P480 A3c real native Image linked; 5.10 provider and Kona source, PCM/compress runtime counts unverified until hardware. P479 HLT fallback retained. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload P480 dual HLT boot images and native A3c proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P480-DUAL-HLT-${{ github.run_id }}-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            phase447b-variants/MANGROVE-P480-NO-A3C-HLT.boot.img
+            phase447b-variants/MANGROVE-P480-A3C-HLT.boot.img
+            phase447-inventory/P480-A3C-LINK-INVENTORY.json
+            phase447-inventory/P480-A3C-STRINGS.txt
+            phase447-inventory/P480-A3C-DUAL-HLT-PROVENANCE.txt
+            phase447-inventory/P480-A3C-HLT-PAIR.json
+            phase447-inventory/P480-A3C-REPACK.json
       - name: Upload P470-A6 verified boot-v2 candidate for controlled first-flash REVIEW
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
