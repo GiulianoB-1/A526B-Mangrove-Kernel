@@ -430,10 +430,23 @@ def stage(root, tg, d54, report):
         f.write_text(src)
     machine = dest / "kona.c"
     machine.write_text(adapt_machine(machine.read_text()))
+    # Build against the real pinned A3b vendor UAPI header tree.
+    # Never add synthetic empty declarations to make compilation pass.
+    uapi = root / ROOT / "a3b/include/uapi/audio"
+    for header in ("linux/msm_audio.h", "sound/audio_effects.h",
+                   "sound/audio_compressed_formats.h"):
+        if not (uapi / header).is_file():
+            raise RuntimeError("P480 required real 5.4 vendor header missing " + header)
     # 5.4 A3b and TG A3a provide the actual header API declarations.
     mk = r"""# P480_A3C_NATIVE_WCD938X_KONA_V1
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include
+# The pinned A3b donor carries TG/QCOM UAPI headers in include/uapi/audio/.
+# Add its root so <audio/linux/msm_audio.h> and
+# <audio/sound/audio_effects.h> resolve to genuine donor declarations.
+subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi
+subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include/uapi/audio
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include
+subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3c
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3c/codecs
 subdir-ccflags-y += -DCONFIG_SND_SOC_QDSP6V2=1
