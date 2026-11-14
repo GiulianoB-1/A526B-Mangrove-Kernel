@@ -437,8 +437,31 @@ def stage(root, tg, d54, report):
                    "sound/audio_compressed_formats.h"):
         if not (uapi / header).is_file():
             raise RuntimeError("P480 required real 5.4 vendor header missing " + header)
+    # P480 exact SM7325 5.4 ION declarations, privately scoped to A3c.
+    # These are API headers only. Do not enable CONFIG_ION_MSM_HEAPS,
+    # replace the P479 allocator, or create a fake ION backend.
+    for original, relative in (
+        ("include/linux/msm_ion.h", "linux/msm_ion.h"),
+        ("include/uapi/linux/msm_ion.h", "uapi/linux/msm_ion.h"),
+        ("include/uapi/linux/msm_ion_ids.h", "linux/msm_ion_ids.h"),
+    ):
+        src = d54 / original
+        if not src.is_file():
+            raise RuntimeError("P480 pinned ION declaration absent " + original)
+        out = dest / "include" / relative
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, out)
+    for original, sha in (
+        ("linux/msm_ion.h", "struct ion_prefetch_region"),
+        ("uapi/linux/msm_ion.h", "ION_FLAGS_CP_MASK"),
+        ("linux/msm_ion_ids.h", "ION_ADSP_HEAP_ID"),
+    ):
+        if sha not in (dest / "include" / original).read_text():
+            raise RuntimeError("P480 pinned ION ABI declaration drift " + original)
     # 5.4 A3b and TG A3a provide the actual header API declarations.
     mk = r"""# P480_A3C_NATIVE_WCD938X_KONA_V1
+# A3c-specific real donor ION declarations precede public A3b includes.
+subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3c/include
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3b/include
 # The pinned A3b donor carries TG/QCOM UAPI headers in include/uapi/audio/.
 # Add its root so <audio/linux/msm_audio.h> and
@@ -502,6 +525,10 @@ def check(root):
                    "devm_snd_soc_register_card(&pdev->dev, card);"):
         if marker not in s:
             raise RuntimeError("P480 real Kona marker missing " + marker)
+    for rel in ("linux/msm_ion.h", "uapi/linux/msm_ion.h",
+                "linux/msm_ion_ids.h"):
+        if not (dest / "include" / rel).is_file():
+            raise RuntimeError("P480 pinned ION donor header missing " + rel)
     init=(dest / "platform_init.c").read_text()
     for forbidden in ("msm_voice_host_init(", "msm_pcm_voice_init(",
                       "msm_pcm_voip_init(", "msm_lsm_client_init(",
