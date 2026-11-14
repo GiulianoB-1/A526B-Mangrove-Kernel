@@ -266,6 +266,79 @@ def adapt_510_pcm(source):
     return source
 
 
+def adapt_510_afe(source):
+    """Keep real AFE PCM callbacks while adapting the component API."""
+    old = re.compile(r'static const struct snd_pcm_ops msm_afe_ops = \{[\s\S]*?\n\};')
+    m = list(old.finditer(source))
+    if len(m) != 1:
+        raise RuntimeError("P480 AFE donor ops table drift")
+    funcs = (
+        ("int", "open", "struct snd_pcm_substream *substream",
+         "msm_afe_open(substream)"),
+        ("int", "close", "struct snd_pcm_substream *substream",
+         "msm_afe_close(substream)"),
+        ("int", "hw_params",
+         "struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params",
+         "msm_afe_hw_params(substream, params)"),
+        ("int", "prepare", "struct snd_pcm_substream *substream",
+         "msm_afe_prepare(substream)"),
+        ("int", "trigger", "struct snd_pcm_substream *substream, int cmd",
+         "msm_afe_trigger(substream, cmd)"),
+        ("snd_pcm_uframes_t", "pointer", "struct snd_pcm_substream *substream",
+         "msm_afe_pointer(substream)"),
+        ("int", "copy_user",
+         "struct snd_pcm_substream *substream, int channel, unsigned long pos, "
+         "void __user *buf, unsigned long bytes",
+         "msm_afe_copy(substream, channel, pos, buf, bytes)"),
+        ("int", "mmap",
+         "struct snd_pcm_substream *substream, struct vm_area_struct *vma",
+         "msm_afe_mmap(substream, vma)"),
+    )
+    wrappers = (
+        "static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd);\n"
+        "/* P480: actual 5.4 AFE callbacks with 5.10 component prototypes. */\n"
+    )
+    for ret, name, params, call in funcs:
+        wrappers += ("static %s p480_afe_%s(struct snd_soc_component *component, "
+                     "%s)\n{\n\treturn %s;\n}\n" %
+                     (ret, name, params, call))
+    wrappers += (
+        "static int p480_afe_construct(struct snd_soc_component *component,\n"
+        "\t\tstruct snd_soc_pcm_runtime *rtd)\n"
+        "{\n\treturn msm_asoc_pcm_new(rtd);\n}\n"
+    )
+    source = source[:m[0].start()] + wrappers + source[m[0].end():]
+    oldcomp = "\t.ops\t\t= &msm_afe_ops,\n\t.pcm_new\t= msm_asoc_pcm_new,"
+    if source.count(oldcomp) != 1:
+        raise RuntimeError("P480 AFE component donor drift")
+    adapted = "\n".join("\t.%s = p480_afe_%s," % (name, name)
+                        for _, name, _, _ in funcs)
+    source = source.replace(oldcomp,
+        adapted + "\n\t.pcm_construct = p480_afe_construct,", 1)
+    return source
+
+
+def adapt_510_hostless(source):
+    """Hostless prepare still delegates to actual 5.4 callback."""
+    old = re.compile(r'static const struct snd_pcm_ops msm_pcm_hostless_ops = '
+                     r'\{[\s\S]*?\n\};')
+    m = list(old.finditer(source))
+    if len(m) != 1:
+        raise RuntimeError("P480 hostless PCM donor ops drift")
+    wrapper = (
+        "static int p480_hostless_prepare(struct snd_soc_component *component,\n"
+        "\t\tstruct snd_pcm_substream *substream)\n"
+        "{\n\treturn msm_pcm_hostless_prepare(substream);\n}\n"
+    )
+    source = source[:m[0].start()] + wrapper + source[m[0].end():]
+    oldcomp = "\t.ops\t\t= &msm_pcm_hostless_ops,"
+    if source.count(oldcomp) != 1:
+        raise RuntimeError("P480 hostless component donor drift")
+    source = source.replace(oldcomp,
+                            "\t.prepare = p480_hostless_prepare,", 1)
+    return source
+
+
 def compress_compat_header(d54):
     """Use exact 5.4 donor extension values; never overwrite global ACK UAPI."""
     params = (d54 / "include/uapi/sound/compress_params.h").read_text()
@@ -582,8 +655,12 @@ def stage(root, tg, d54, report):
             if f.stat().st_size < 500_000:
                 raise RuntimeError("P480 truncated real routing provider")
         src = f.read_text()
-        if name == "msm-pcm-q6-v2.c":
+        if name in ("msm-pcm-q6-v2.c", "msm-pcm-q6-noirq.c"):
             src = adapt_510_pcm(src)
+        if name == "msm-pcm-afe-v2.c":
+            src = adapt_510_afe(src)
+        if name == "msm-pcm-hostless.c":
+            src = adapt_510_hostless(src)
         if name == "msm-compress-q6-v2.c":
             src = adapt_510_compress(src)
         if name == "platform_init.c":
@@ -703,6 +780,13 @@ def check(root):
     compr=(dest / "msm-compress-q6-v2.c").read_text()
     if ".pcm_construct = p480_pcm_construct" not in pcm:
         raise RuntimeError("P480 real PCM component callback bridge missing")
+    for filename, needle in (
+        ("msm-pcm-q6-noirq.c", ".pcm_construct = p480_pcm_construct"),
+        ("msm-pcm-afe-v2.c", ".pcm_construct = p480_afe_construct"),
+        ("msm-pcm-hostless.c", ".prepare = p480_hostless_prepare"),
+    ):
+        if needle not in (dest / filename).read_text():
+            raise RuntimeError("P480 real AFE/noirq/hostless component API bridge missing " + filename)
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
     if "SND_AUDIOCODEC_AC3" not in (dest / "p480-compress-abi.h").read_text():
