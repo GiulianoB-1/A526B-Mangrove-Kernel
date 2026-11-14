@@ -40,16 +40,20 @@ def inspect(root, tg, d54):
     pin(d54, D54, "SM7325")
     t = (tg / "techpack/audio/asoc/kona.c").read_text()
     d = (d54 / "techpack/audio/asoc/kona.c").read_text()
+    d_links = (d54 / "techpack/audio/asoc/msm_dailink.h").read_text()
     dt = (tg / R02).read_text()
     for token in ("static struct snd_soc_dai_link msm_common_dai_links[]",
                   "devm_snd_soc_register_card(&pdev->dev, card);",
                   'snd_soc_of_parse_card_name(card, "qcom,model");'):
         if token not in t:
             raise RuntimeError("P478 TG Kona machine ABI drift: "+token)
-    for token in ("SND_SOC_DAILINK_DEFS(", "struct snd_soc_dai_link_component",
-                  "devm_snd_soc_register_card(&pdev->dev, card);"):
+    for token in ("struct snd_soc_dai_link_component",
+                  "devm_snd_soc_register_card(&pdev->dev, card);",
+                  '#include "msm_dailink.h"'):
         if token not in d:
             raise RuntimeError("P478 SM7325 Kona 5.4 API pattern drift: "+token)
+    if "SND_SOC_DAILINK_DEFS(" not in d_links:
+        raise RuntimeError("P478 5.4 real component-array FE/BE link definitions missing")
     model = re.findall(r'\bqcom,model\s*=\s*"([^"]+)"', dt)
     if model.count("lito-lagoonmtp-snd-card") != 1:
         raise RuntimeError("P478 r02 A52 sound card name drift: "+repr(model))
