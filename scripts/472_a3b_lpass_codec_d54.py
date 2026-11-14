@@ -563,7 +563,8 @@ def adapt_510_api(rel,data):
         # The original returns success for ADSP-down paths. This is
         # unsafe because pinconf callers then use register value 0.
         old='if (!lpi_dev_up) {'
-        if data.count(old)!=2:
+        # Two MMIO helper guards plus one original SSR recovery guard.
+        if data.count(old)!=3:
             raise RuntimeError("P478 LPI ADSP guard count drift")
         data=data.replace('return 0;\n\t}\n\tret = pm_runtime_resume_and_get(lpi_dev);',
                           'return -EHOSTDOWN;\n\t}\n\tret = pm_runtime_resume_and_get(lpi_dev);',1)
