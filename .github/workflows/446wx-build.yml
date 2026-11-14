@@ -1819,6 +1819,13 @@ jobs:
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --d54 "$PWD/workspace/sm7325-d54" \
             --report phase447-inventory/P477B-A3B-DT-CONTRACT.json
+          # Source-level A3c preflight only. Real FE/compress providers are
+          # not built yet; never register an empty/fake ALSA sound card.
+          python3 -m py_compile scripts/478_a3c_kona_preflight.py
+          python3 scripts/478_a3c_kona_preflight.py --root "$ROOT" \
+            --tg "$PWD/workspace/touchgrass-a52xq" \
+            --d54 "$PWD/workspace/sm7325-d54" \
+            --report phase447-inventory/P478-A3C-KONA-PREFLIGHT.json
           python3 scripts/472_a1_tg_donor_inventory.py \
             --tg "$PWD/workspace/touchgrass-a52xq" \
             --report phase447-inventory/P472-A1-DONOR-INVENTORY.json
@@ -2067,6 +2074,17 @@ jobs:
               echo "::error title=P477 real source/Image marker missing::$marker"; exit 1
             }
           done
+          # P478: the device GPIO debugfs callbacks contain no LPASS/WCD MMIO.
+          for marker in 'P478 LPI gpio debugfs:' \
+                        'P478 WCD gpio debugfs:' \
+                        'P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d'; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P478 real compiled GPIO safety marker missing::$marker"; exit 1
+            }
+          done
+          grep -Fxq 'CONFIG_DEBUG_FS=y' "$BUILD/.config" || {
+            echo "::error title=P478 GPIO debugfs safety cannot be verified without DEBUG_FS"; exit 1
+          }
           echo 'P477 H3+SHADOW+A3b real source/link markers PASS; NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           for marker in 'P473 B1 SE1_ONLY reg=0x884000 line=0' \
                         'P473 B1 SE1_ONLY reject non-SE1' \
@@ -2270,6 +2288,8 @@ jobs:
             phase447-inventory/P472-A3B-SOURCE.json
             phase447-inventory/P477B-A3B-DT-CONTRACT.json
             scripts/477b_dt_contract_audit.py
+            phase447-inventory/P478-A3C-KONA-PREFLIGHT.json
+            scripts/478_a3c_kona_preflight.py
             scripts/477_h3_dcp_stepped.py
             scripts/477_mgbatt_shadow_stage.py
             scripts/472_a3b_lpass_codec_d54.py
