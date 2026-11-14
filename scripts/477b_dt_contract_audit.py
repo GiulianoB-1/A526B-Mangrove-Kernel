@@ -48,6 +48,7 @@ OPTIONAL = {
     ("asoc/codecs/bolero/rx-macro.c", "qcom,is-used-swr-gpio"): "optional GPIO selection, macro provides default",
     ("asoc/codecs/bolero/tx-macro.c", "qcom,is-used-swr-gpio"): "optional GPIO selection, macro provides default",
     ("asoc/codecs/bolero/tx-macro.c", "qcom,disable-afe-wakeup-event-listener"): "optional AFE wake-event configuration",
+    ("asoc/codecs/bolero/va-macro.c", "qcom,va-without-decimation"): "optional VA decimation mode; boolean false when absent from A52 r02",
     ("asoc/codecs/bolero/va-macro.c", "qcom,is-used-swr-gpio"): "optional GPIO selection, macro provides default",
     ("asoc/codecs/bolero/va-macro.c", "qcom,va-vdd-micb-voltage"): "conditional VA micbias regulator property",
     ("asoc/codecs/bolero/va-macro.c", "qcom,va-vdd-micb-current"): "conditional VA micbias regulator property",
