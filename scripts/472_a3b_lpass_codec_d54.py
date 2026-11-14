@@ -257,6 +257,16 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "asoc/codecs/wcd-dsp-mgr.c":
+        # ACK 5.10 still implements arch_setup_dma_ops() on arm64,
+        # declared by linux/dma-map-ops.h rather than the older
+        # linux/dma-mapping.h included by the pinned Samsung donor.
+        # Preserve the exact hardware DMA configuration and its args.
+        old="#include <linux/dma-mapping.h>"
+        if data.count(old)!=1 or data.count(
+                "arch_setup_dma_ops(wdsp->mdev, 0, 0, NULL, 0);")!=1:
+            raise RuntimeError("P472 A3b WCD DSP manager DMA API donor drift")
+        data=data.replace(old,old+"\n#include <linux/dma-map-ops.h>",1)
     elif rel == "asoc/codecs/wcd-mbhc-adc.c":
         # SM7325 ADC code uses no symbols from legacy pdata.h. That
         # header imports linux/slimbus/slimbus.h when WDSP codec-core
@@ -563,6 +573,12 @@ def check(root):
     if ("wcd-dsp-mgr.o" not in (target/"asoc/codecs/Makefile").read_text() or
         "wcd9xxx-soc-init.o" not in (target/"asoc/codecs/Makefile").read_text()):
         raise RuntimeError("P472 A3b WCD DSP manager objects missing")
+    # Real arm64 DMA configuration remains intact, now with its
+    # proper ACK 5.10 declaration. Do not skip setup or insert stubs.
+    if (wdsp_c.count("#include <linux/dma-map-ops.h>")!=1 or
+        wdsp_c.count("arch_setup_dma_ops(wdsp->mdev, 0, 0, NULL, 0);")!=1 or
+        wdsp_c.count("#include <linux/dma-mapping.h>")!=1):
+        raise RuntimeError("P472 A3b WCD DSP manager 5.10 DMA setup changed")
     # The donor's wcd-mbhc-v2-api.h otherwise supplies inline
     # no-op/false-success MBHC functions that collide with the real
     # wcd-mbhc-v2.c implementation. B3 must select real prototypes.
