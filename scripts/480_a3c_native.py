@@ -273,23 +273,37 @@ static void p480_log_real_device_counts(struct snd_soc_card *card)
 def adapt_machine(source):
     if '#include "msm_dailink.h"' not in source:
         raise RuntimeError("P480 Kona component array ABI missing")
-    # Existing donor 5.4 card and link selection is retained.
-    # Only cut links for real absent physical providers before registration.
-    anchor = 'static int msm_asoc_machine_probe(struct platform_device *pdev)'
-    source = one(source, anchor, FILTER + '\n' + anchor, "real Kona machine")
+    # Exclude the physical WSA speaker AUX devices but keep the real
+    # WCD938x AUX device needed by the headset microphone path.
+    source = one(source,
+        '\t/* Get maximum WSA device count for this platform */',
+        '\t/* P480: speaker AUX is not ported. */\n'
+        '\tdev_info(&pdev->dev, "P480 A3c LINK_SKIPPED name=WSA_AUX reason=PHYSICAL_CODEC_NOT_PORTED\\n");\n'
+        '\tgoto codec_aux_dev;\n'
+        '\t/* Get maximum WSA device count for this platform */',
+        "WSA AUX bypass")
+    # Link platform names become null after OF phandle conversion.
+    # Therefore filter the real FE/BE links before that conversion.
+    populate = 'ret = msm_populate_dai_link_component_of_node(card);'
+    source = one(source, populate,
+        'p480_filter_links(card);\n'
+        '\tif (!card->num_links) {\n'
+        '\t\tret = -ENODEV;\n'
+        '\t\tgoto err;\n'
+        '\t}\n'
+        '\t' + populate,
+        "filter before OF conversion")
     reg = 'ret = devm_snd_soc_register_card(&pdev->dev, card);'
     source = one(source, reg,
-        'p480_filter_links(card);\n'
-        '\tif (!card->num_links)\n'
-        '\t\treturn -ENODEV;\n'
-        '\t' + reg + '\n'
+        reg + '\n'
         '\tdev_info(&pdev->dev,\n'
         '\t\t"P480 A3c CARD register rc=%d name=%s links=%d skipped=%d\\n",\n'
         '\t\tret, card->name, card->num_links, p480_skipped);\n'
         '\tif (!ret)\n'
         '\t\tp480_log_real_device_counts(card);',
-        "card real registration and counts")
-    return source
+        "card real registration")
+    anchor = 'static int msm_asoc_machine_probe(struct platform_device *pdev)'
+    return one(source, anchor, FILTER + '\n' + anchor, "real Kona machine")
 
 def stage(root, tg, d54, report):
     pin(tg, TG_SHA, "TouchGrass")
