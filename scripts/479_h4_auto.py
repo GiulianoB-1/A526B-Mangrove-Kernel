@@ -177,13 +177,26 @@ static void p479_h4_pre_tick(struct a52d_fg *fg)
     if (!fg->p479_h4_ready)
         return;
     if (!strcmp(type,"NONE")) {
-        /* H0's original worker stops charging on VBUS loss. */
+        /* H0's original worker stops charging on VBUS loss.
+         * A fully sampled unplug permits one rearm on a later insert.
+         */
+        fg->p479_h4_saw_unplug=true;
         fg->a52h0_armed=false;
         return;
     }
+    if (fg->p479_h4_saw_unplug) {
+        fg->p479_h4_rearm_allowed=true;
+        fg->p479_h4_saw_unplug=false;
+    }
+    /* Never arm from a stale/failed MUIC read without real VBUS. */
+    {
+        int st=a52h0_regread(fg,A52G_CHG_STATUS1);
+        if (st<0 || !(st&BIT(0)))
+            return;
+    }
     /* The permanent H0 kill and the original P449 thermal latch prevail. */
     if (fg->a52h0_killed || fg->a52h0_active || fg->a52h0_armed ||
-        fg->a52h0_verify_io_streak)
+        !fg->p479_h4_rearm_allowed || fg->a52h0_verify_io_streak)
         return;
     bt=a52g_ntc_temp(fg);
     ct=a52h_chg_ntc_temp(fg);
@@ -197,6 +210,7 @@ static void p479_h4_pre_tick(struct a52d_fg *fg)
     fg->a52g_inhibit_latched=false;
     fg->a52h0_rearm=false;
     fg->a52h0_armed=true;
+    fg->p479_h4_rearm_allowed=false;
     a52h0_state(fg,"ARMED","P479_H4_CABLE_REARM");
 }
 /* Invoked after H0 verification and only inside its 2s guard worker. */
@@ -291,6 +305,8 @@ static ssize_t a52_h4_auto_store(struct device *dev,
                 rc=p476_h2_off(fg,"H4_TAKES_CONTROL");
             if (!rc) {
                 fg->p479_h4_auto=true;
+                fg->p479_h4_rearm_allowed=true;
+                fg->p479_h4_saw_unplug=false;
                 fg->p479_h4_faulted=false;
                 fg->p479_h4_pending=NULL;
                 fg->p479_h4_type=NULL;
@@ -391,7 +407,8 @@ def stage(root, tg):
       "    bool p476_h2_enabled, p476_h2_fast;",
       "    bool p476_h2_enabled, p476_h2_fast;\n"
       "#if IS_ENABLED(CONFIG_P479_H4)\n"
-      "    bool p479_h4_auto,p479_h4_ready,p479_h4_faulted;\n"
+      "    bool p479_h4_auto,p479_h4_ready,p479_h4_faulted;
+    bool p479_h4_rearm_allowed,p479_h4_saw_unplug;\n"
       "    const char *p479_h4_pending,*p479_h4_type;\n"
       "    unsigned long p479_h4_seen;\n"
       "    int p479_h4_applied_icl,p479_h4_applied_fcc;\n"
@@ -435,6 +452,18 @@ def stage(root, tg):
       "    p476_h2_setup(fg);",
       "    p476_h2_setup(fg);\n    p479_h4_setup(fg);",
       "H4 default-off sysfs")
+    # H2/H3 manual sysfs cannot race or queue a new request while H4 owns ICL.
+    s=one(s,
+      'mutex_lock(&fg->a52h0_lock);\n\tif (enable) {',
+      'mutex_lock(&fg->a52h0_lock);\n'
+      '#if IS_ENABLED(CONFIG_P479_H4)\n'
+      '\tif (fg->p479_h4_auto) {\n'
+      '\t\tmutex_unlock(&fg->a52h0_lock);\n'
+      '\t\treturn -EBUSY;\n'
+      '\t}\n'
+      '#endif\n'
+      '\tif (enable) {',
+      "exclusive manual H2 sysfs")
     p.write_text(s)
     k=root/K
     ks=k.read_text()
@@ -463,7 +492,9 @@ def check(root):
                    "P479 H4 FAULT reason=%s",
                    "reg==A52H0_VBUSCNTL && mask!=0x7f",
                    "val>0x44", "p479_h4_pre_tick(fg)",
-                   "p479_h4_setup(fg)"):
+                   "p479_h4_setup(fg)",
+                   "p479_h4_rearm_allowed",
+                   "P479_H4_CABLE_REARM"):
         if needle not in s:
             raise RuntimeError("P479 H4 source gate missing "+needle)
     if s.count("i2c_smbus_write_byte_data(") != 2:
