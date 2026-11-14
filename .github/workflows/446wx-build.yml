@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P477B r02 PINCTRL + shadow cable index HLT (NO ARM)
+run-name: P478 GPIO debugfs/TLMM wake/ECC48 safety HLT (NO ARM)
 on:
   push:
     branches:
@@ -1813,6 +1813,7 @@ jobs:
             --d54 "$PWD/workspace/sm7325-d54" \
             --report phase447-inventory/P472-A3B-SOURCE.json
           python3 scripts/472_a3b_lpass_codec_d54.py --root "$ROOT" --check-only
+          # P478 safety: old A3b/PLATFORM features retained; no A3c card provider yet.
           python3 -m py_compile scripts/477b_dt_contract_audit.py
           python3 scripts/477b_dt_contract_audit.py --root "$ROOT" \
             --tg "$PWD/workspace/touchgrass-a52xq" \
@@ -2204,7 +2205,7 @@ jobs:
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
           python3 scripts/474_hlt_pair.py \
             --normal phase447-inventory/P477-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
-            --hlt phase447b-variants/MANGROVE-P477B-A3B-FIX-NO-ARM.boot.img \
+            --hlt phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --report phase447-inventory/P474-CMDLINE-PAIR.json
           python3 - <<'P476_HLT_GATE'
@@ -2222,19 +2223,19 @@ jobs:
               raise SystemExit("P476: nohlt must be absent and every pair invariant must PASS")
           print("P476 BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
           P476_HLT_GATE
-          echo 'P477 one new HLT image: A3b codec, H3 DCP manual, MGBATT shadow, nohlt=0, NO ARM.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P478 one HLT image: A3b hardware maintained, GPIO debugfs safety, dynamic TLMM wake, canonical ECC48 ramoops, H3+shadow unchanged, NO ARM. A3c machine not yet enabled.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P477B-A3B-FIX-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P477B-A3B-FIX-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P478-GPIO-TLMM-ECC48-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P477B-A3B-FIX-NO-ARM.boot.img
-          } > phase447-inventory/P477B-A3B-FIX-HLT-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img
+          } > phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2254,9 +2255,9 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P477B-A3B-FIX-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P477B-A3B-FIX-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img
             phase447-inventory/P474-CMDLINE-PAIR.json
             phase447-inventory/P474-IDLE-SOURCE.json
             phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
@@ -2287,7 +2288,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P477B-A3B-FIX-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2337,7 +2338,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P477B-A3B-FIX-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
