@@ -624,6 +624,71 @@ def adapt_510_api(rel,data):
         )
         if data.count(old)!=1:raise RuntimeError("P478 LPI pinconf write donor drift")
         data=data.replace(old,new,1)
+        # One remaining native pinconf branch is slew-rate access,
+        # which formerly ignored errors and kept a temporary slew
+        # pointer after failures. It must fail closed too.
+        old=(
+            '\t\t\t\tlpi_gpio_write(pad, LPI_SLEW_REG_VAL_CTL, arg);\n'
+            '\t\t\t\tpad->base = pad->slew_base;\n'
+            '\t\t\t\tgoto slew_exit;'
+        )
+        new=(
+            '\t\t\t\tret = lpi_gpio_write(pad, LPI_SLEW_REG_VAL_CTL, arg);\n'
+            '\t\t\t\tpad->base = pad->slew_base;\n'
+            '\t\t\t\tgoto slew_exit;'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P478 LPI direct slew write donor drift")
+        data=data.replace(old,new,1)
+        old=(
+            '\t\t\tval = lpi_gpio_read(pad, LPI_SLEW_REG_VAL_CTL);\n'
+            '\t\t\tpad->offset = pad->slew_offset;'
+        )
+        new=(
+            '\t\t\tret = lpi_gpio_read(pad, LPI_SLEW_REG_VAL_CTL);\n'
+            '\t\t\tif (ret < 0)\n'
+            '\t\t\t\tgoto slew_exit;\n'
+            '\t\t\tval = ret;\n'
+            '\t\t\tpad->offset = pad->slew_offset;'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P478 LPI slew read donor drift")
+        data=data.replace(old,new,1)
+        old=(
+            '\t\t\tlpi_gpio_write(pad, LPI_SLEW_REG_VAL_CTL, val);\n'
+            'slew_exit:\n'
+            '\t\t\tmutex_unlock(&state->slew_access_lock);\n'
+            '\t\t\tbreak;'
+        )
+        new=(
+            '\t\t\tret = lpi_gpio_write(pad, LPI_SLEW_REG_VAL_CTL, val);\n'
+            'slew_exit:\n'
+            '\t\t\tmutex_unlock(&state->slew_access_lock);\n'
+            '\t\t\tif (ret < 0)\n'
+            '\t\t\t\tgoto done;\n'
+            '\t\t\tbreak;'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P478 LPI slew write/lock donor drift")
+        data=data.replace(old,new,1)
+        old=(
+            'done:\n'
+            '\treturn ret;\n'
+            '}\n'
+            '\nstatic const struct pinconf_ops lpi_gpio_pinconf_ops'
+        )
+        new=(
+            'done:\n'
+            '\t/* Restore primary GPIO register mapping even on failed slew. */\n'
+            '\tpad->base = pad->gpio_base;\n'
+            '\tpad->offset = pad->gpio_offset;\n'
+            '\treturn ret;\n'
+            '}\n'
+            '\nstatic const struct pinconf_ops lpi_gpio_pinconf_ops'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P478 LPI pinconf done donor drift")
+        data=data.replace(old,new,1)
         # The user-visible GPIO read reports an errno if the hardware
         # is unavailable; write() paths use pinconf errno, not success.
         old='\tvalue = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n\treturn value;'
@@ -887,6 +952,10 @@ def check(root):
                      "return -EHOSTDOWN;", "return lpi_gpio_write("):
         if expected not in lpi:
             raise RuntimeError("P478 LPASS guarded GPIO access missing: "+expected)
+    if (lpi.count("ret = lpi_gpio_write(pad, LPI_SLEW_REG_VAL_CTL,")!=2 or
+        "ret = lpi_gpio_read(pad, LPI_SLEW_REG_VAL_CTL);" not in lpi or
+        "pad->base = pad->gpio_base;" not in lpi):
+        raise RuntimeError("P478 LPASS slew register read/write guard missing")
     if ("static void lpi_gpio_dbg_show_one(" in lpi or
         "pm_runtime_get_sync(lpi_dev)" in lpi or
         "P478 WCD gpio debugfs:" not in wcd or
