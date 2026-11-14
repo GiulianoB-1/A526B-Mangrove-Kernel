@@ -427,7 +427,9 @@ def adapt_510_api(rel,data):
         old_include="#include <linux/pinctrl/qcom-pinctrl.h>"
         new_include=(
             "#include <linux/pinctrl/consumer.h>\n"
-            "#include <linux/interrupt.h>"
+            "#include <linux/interrupt.h>\n"
+            "#include <linux/gpio/driver.h>\n"
+            "#include <linux/string.h>"
         )
         if data.count(old_include)!=1:
             raise RuntimeError("P472 A3b CDC private 5.4 TLMM header drift")
@@ -437,17 +439,53 @@ def adapt_510_api(rel,data):
             "\t\t\t\t\t\t    enable);"
         )
         new_call=(
-            "\t\t\t/* Propagate actual GPIO/IRQ mapping and wake errors. */\n"
-            "\t\t\tint gpio_irq = gpio_to_irq(gpio_data->tlmm_gpio[i]);\n"
-            "\t\t\tif (gpio_irq < 0) {\n"
-            "\t\t\t\tret = gpio_irq;\n"
-            "\t\t\t\tgoto exit;\n"
+            "\t\t\t/* The r02 entries are TLMM pin offsets, not global GPIOs. */\n"
+            "\t\t\tstruct gpio_chip *tlmm = gpiochip_find(NULL, p478_match_tlmm_gpiochip);\n"
+            "\t\t\tint pin = gpio_data->tlmm_gpio[i];\n"
+            "\t\t\tint gpio = -1, gpio_irq = -1;\n"
+            "\t\t\tif (!tlmm || tlmm->base < 0) {\n"
+            "\t\t\t\tret = -ENODEV;\n"
+            "\t\t\t} else if (pin < 0 || pin >= tlmm->ngpio ||\n"
+            "\t\t\t\t   !gpiochip_line_is_valid(tlmm, pin)) {\n"
+            "\t\t\t\tret = -EINVAL;\n"
+            "\t\t\t} else {\n"
+            "\t\t\t\tgpio = tlmm->base + pin;\n"
+            "\t\t\t\tgpio_irq = gpio_to_irq(gpio);\n"
+            "\t\t\t\tret = gpio_irq < 0 ? gpio_irq :\n"
+            "\t\t\t\t\tirq_set_irq_wake(gpio_irq, enable);\n"
             "\t\t\t}\n"
-            "\t\t\tret = irq_set_irq_wake(gpio_irq, enable);"
+            "\t\t\tpr_info(\"P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d\\n\",\n"
+            "\t\t\t\tpin, gpio, gpio_irq, enable, ret);\n"
+            "\t\t\tif (ret < 0)\n"
+            "\t\t\t\tgoto exit;";
+
         )
         if data.count(old_call)!=1:
             raise RuntimeError("P472 A3b CDC downstream GPIO wake call drift")
         data=data.replace(old_call,new_call,1)
+        # Find only TLMM at the verified Mangrove 0xF100000
+        # node. Never assume a fixed global GPIO base.
+        anchor="\nstruct msm_cdc_pinctrl_info {"
+        matcher=(
+            '\n/* P478: match the live A52 TLMM GPIO chip, not LPASS or PMIC. */\n'
+            'static int p478_match_tlmm_gpiochip(struct gpio_chip *chip, void *unused)\n'
+            '{\n'
+            '\tconst struct device_node *np = chip->of_node;\n'
+            '\tconst char *base;\n'
+            '\t(void)unused;\n'
+            '\tif (!np && chip->parent)\n'
+            '\t\tnp = chip->parent->of_node;\n'
+            '\tif (!np || !np->full_name)\n'
+            '\t\treturn 0;\n'
+            "\tbase = strrchr(np->full_name, '/');\n"
+            "\tbase = base ? base + 1 : np->full_name;\n"
+            '\treturn !strcmp(base, "pinctrl@f100000");\n'
+            '}\n'
+        )
+        if data.count(anchor)!=1:
+            raise RuntimeError("P478 CDC TLMM gpio_chip declaration anchor drift")
+        data=data.replace(anchor,"\n"+matcher+anchor,1)
+
         # r02 GPIO wake property. Legacy key is a fallback only if absent.
         old_tlmm=(
             'cdc_tlmm_gpio:\n'
@@ -791,10 +829,12 @@ def check(root):
     for code in (
         "#include <linux/pinctrl/consumer.h>",
         "#include <linux/interrupt.h>",
-        "int gpio_irq = gpio_to_irq(gpio_data->tlmm_gpio[i]);",
-        "ret = irq_set_irq_wake(gpio_irq, enable);",
-        "if (gpio_irq < 0) {",
-        "ret = gpio_irq;",
+        "gpiochip_find(NULL, p478_match_tlmm_gpiochip)",
+        '!strcmp(base, "pinctrl@f100000")',
+        "gpio = tlmm->base + pin;",
+        "gpio_irq = gpio_to_irq(gpio);",
+        "irq_set_irq_wake(gpio_irq, enable);",
+        "P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d",
     ):
         if cdc_510.count(code)!=1:
             raise RuntimeError("P472 A3b real 5.10 GPIO IRQ wake missing: "+code)
