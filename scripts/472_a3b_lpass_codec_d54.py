@@ -428,6 +428,7 @@ def adapt_510_api(rel,data):
         new_include=(
             "#include <linux/pinctrl/consumer.h>\n"
             "#include <linux/interrupt.h>\n"
+            "#include <linux/mutex.h>\n"
             "#include <linux/gpio/driver.h>\n"
             "#include <linux/string.h>"
         )
@@ -439,7 +440,7 @@ def adapt_510_api(rel,data):
             "\t\t\t\t\t\t    enable);"
         )
         new_call=(
-            "\t\t\t/* The r02 entries are TLMM pin offsets, not global GPIOs. */\n"
+            "\t\t\t/* r02 TLMM offsets, not global GPIO numbers. */\n"
             "\t\t\tstruct gpio_chip *tlmm = gpiochip_find(NULL, p478_match_tlmm_gpiochip);\n"
             "\t\t\tint pin = gpio_data->tlmm_gpio[i];\n"
             "\t\t\tint gpio = -1, gpio_irq = -1;\n"
@@ -451,18 +452,55 @@ def adapt_510_api(rel,data):
             "\t\t\t} else {\n"
             "\t\t\t\tgpio = tlmm->base + pin;\n"
             "\t\t\t\tgpio_irq = gpio_to_irq(gpio);\n"
-            "\t\t\t\tret = gpio_irq < 0 ? gpio_irq :\n"
-            "\t\t\t\t\tirq_set_irq_wake(gpio_irq, enable);\n"
+            "\t\t\t\tif (gpio_irq < 0) {\n"
+            "\t\t\t\t\tret = gpio_irq;\n"
+            "\t\t\t\t} else if (gpio_data->p479_wake_enabled[i] == enable) {\n"
+            "\t\t\t\t\tif (!enable)\n"
+            "\t\t\t\t\t\tpr_info(\"P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=0 skip_unbalanced\\n\",\n"
+            "\t\t\t\t\t\t\tpin, gpio, gpio_irq);\n"
+            "\t\t\t\t\tcontinue;\n"
+            "\t\t\t\t} else {\n"
+            "\t\t\t\t\tret = irq_set_irq_wake(gpio_irq, enable);\n"
+            "\t\t\t\t\tif (!ret)\n"
+            "\t\t\t\t\t\tgpio_data->p479_wake_enabled[i] = enable;\n"
+            "\t\t\t\t}\n"
             "\t\t\t}\n"
             "\t\t\tpr_info(\"P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d\\n\",\n"
             "\t\t\t\tpin, gpio, gpio_irq, enable, ret);\n"
             "\t\t\tif (ret < 0)\n"
             "\t\t\t\tgoto exit;"
-
         )
         if data.count(old_call)!=1:
             raise RuntimeError("P472 A3b CDC downstream GPIO wake call drift")
         data=data.replace(old_call,new_call,1)
+
+        # P479: IRQ wake is reference-counted. Track the per-pin state
+        # under a mutex to avoid duplicate enables and unbalanced disables.
+        state_anchor="\tu32 tlmm_gpio[MAX_GPIOS];"
+        state_repl=(
+            "\tu32 tlmm_gpio[MAX_GPIOS];\n"
+            "\tbool p479_wake_enabled[MAX_GPIOS];\n"
+            "\tstruct mutex p479_wake_lock;"
+        )
+        if data.count(state_anchor)!=1:
+            raise RuntimeError("P479 CDC wake owner struct drift")
+        data=data.replace(state_anchor,state_repl,1)
+        lock_anchor="\tif (gpio_data->wakeup_capable) {\n"
+        if data.count(lock_anchor)!=1:
+            raise RuntimeError("P479 CDC wake entry drift")
+        data=data.replace(lock_anchor,
+            "\tmutex_lock(&gpio_data->p479_wake_lock);\n"+lock_anchor,1)
+        unlock_anchor="exit:\n\treturn ret;\n}"
+        if data.count(unlock_anchor)!=1:
+            raise RuntimeError("P479 CDC wake return drift")
+        data=data.replace(unlock_anchor,
+            "exit:\n\tmutex_unlock(&gpio_data->p479_wake_lock);\n\treturn ret;\n}",1)
+        alloc_anchor="if (!gpio_data)\n\t\treturn -ENOMEM;"
+        if data.count(alloc_anchor)!=1:
+            raise RuntimeError("P479 CDC wake allocation drift")
+        data=data.replace(alloc_anchor,alloc_anchor+
+            "\n\tmutex_init(&gpio_data->p479_wake_lock);",1)
+
         # Find only TLMM at the verified Mangrove 0xF100000
         # node. Never assume a fixed global GPIO base.
         anchor="\nstruct msm_cdc_pinctrl_info {"
@@ -921,6 +959,9 @@ def check(root):
         "gpio_irq = gpio_to_irq(gpio);",
         "irq_set_irq_wake(gpio_irq, enable);",
         "P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d",
+        "skip_unbalanced",
+        "p479_wake_enabled",
+        "mutex_lock(&gpio_data->p479_wake_lock)",
     ):
         if cdc_510.count(code)!=1:
             raise RuntimeError("P472 A3b real 5.10 GPIO IRQ wake missing: "+code)

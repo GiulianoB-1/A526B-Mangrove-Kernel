@@ -1,5 +1,5 @@
 name: Mangrove P460b TG apps-SMMU opt-in, H0 2s, QUSB, ECC48
-run-name: P478 GPIO debugfs/TLMM wake/ECC48 safety HLT (NO ARM)
+run-name: P479 H4/shadow3/CDC-wake HLT (A3c native pending, NO ARM)
 on:
   push:
     branches:
@@ -45,6 +45,7 @@ on:
       - agent/p476-a3-sndcard-s2-cable-h2-no-arm
       - agent/p476-h2-only-a2a-hlt-no-arm
       - agent/p472-a3a-q6-services-from-p476-h2-hlt-no-arm
+      - agent/p479-h4-shadow3-cdc-wake-no-arm
   workflow_dispatch:
     inputs:
       decode_pc:
@@ -133,7 +134,7 @@ jobs:
           python3 scripts/470_a2_lagoon_iommu_reservations.py --self-test
           python3 -m py_compile scripts/470_a6f_qmi_tg_parity.py scripts/470_a6g_ipa47_stats_tg.py scripts/471_d1_datarmnet_stage.py scripts/471_d1_tg_netfilter_audit.py scripts/473_b1_probe_guard.py scripts/473_b2_se1_pinctrl.py scripts/473_b3_se1_baud.py scripts/472_a0_native.py scripts/472_a1_hdr32_gate.py scripts/472_a1_tg_donor_inventory.py scripts/472_a1_dispatch_stage.py scripts/472_a1_provenance.py scripts/472_a1_tg_native.py
           # Catch P472 A3b LPASS generator syntax errors before any kernel build.
-          python3 -m py_compile scripts/472_a3b_lpass_codec_d54.py
+          python3 -m py_compile scripts/472_a3b_lpass_codec_d54.py scripts/479_h4_auto.py scripts/479_mgbatt_shadow3.py
           python3 -m py_compile scripts/470_a3_stage_builtin.py scripts/470_a4_ipa_arm.py scripts/470_a4_dtb_audit.py scripts/470_a4_dma_iova_trace.py scripts/470_a4b_merged_dtb_audit.py scripts/470_a4b_mss_notifier.py scripts/470_a6b_mss_ssr_abi_guard.py scripts/470_a6b_ssr_preprocessed_audit.py scripts/470_a6b_678_addr2line.py scripts/470_a6c_notifier_abi.py scripts/470_a6c_notifier_preprocess_audit.py scripts/470_a6c_kbuild_cpp_replay.py scripts/470_a6d_ipa_fw_smmu_cb.py scripts/470_a6e_ipa_clients_ready.py scripts/470_a6e_map_initcall_audit.py
           python3 scripts/461_enable_sensors_fastrpc.py --selftest
           python3 -m py_compile scripts/465_fastrpc_mmap_guard.py
@@ -365,10 +366,19 @@ jobs:
               --tg "$PWD/workspace/touchgrass-a52xq" --repo "$PWD" \
               --report phase447-inventory/P477-MGBATT-SHADOW-SOURCE.json
             python3 scripts/477_mgbatt_shadow_stage.py --root "$ROOT" --check-only
+            # P479 H4: one additional register, VBUSCNTL, through H0 only.
+            # Independent CONFIG_P479_H4 runtime sysfs remains default OFF.
+            python3 scripts/479_h4_auto.py --root "$ROOT" \
+              --tg "$PWD/workspace/touchgrass-a52xq" \
+              --report phase447-inventory/P479-H4-SOURCE.json
+            python3 scripts/479_h4_auto.py --root "$ROOT" --check-only
+            python3 scripts/479_mgbatt_shadow3.py --root "$ROOT" \
+              --report phase447-inventory/P479-MGBATT-SHADOW3-SOURCE.json
+            python3 scripts/479_mgbatt_shadow3.py --root "$ROOT" --check-only
             # H2 runtime current request defaults OFF; no automatic charging. This diagnostic build links
             # their code, while H2 runtime sysfs manual arm defaults 0.
             "$ROOT/scripts/config" --file "$PWD/workspace/gki-phase199-out/.config" \
-              --enable P475_S2_CABLE --enable P476_H2 --enable P477_H0_REARM_FIX --enable P477_H3 --enable MGBATT_SHADOW
+              --enable P475_S2_CABLE --enable P476_H2 --enable P477_H0_REARM_FIX --enable P477_H3 --enable MGBATT_SHADOW --enable P479_H4
             make -C "$ROOT" O="$PWD/workspace/gki-phase199-out" ARCH=arm64 \
               CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
               LLVM=1 LLVM_IAS=1 olddefconfig
@@ -2056,7 +2066,23 @@ jobs:
           grep -aFq 'P476 H2 OFF reason=%s' "$BUILD/arch/arm64/boot/Image"
           python3 scripts/477_h3_dcp_stepped.py --root "$ROOT" --check-only
           python3 scripts/477_mgbatt_shadow_stage.py --root "$ROOT" --check-only
+          python3 scripts/479_h4_auto.py --root "$ROOT" --check-only
+          python3 scripts/479_mgbatt_shadow3.py --root "$ROOT" --check-only
           python3 scripts/472_a3b_lpass_codec_d54.py --root "$ROOT" --check-only
+          grep -Fxq 'CONFIG_P479_H4=y' "$BUILD/.config" || {
+            echo "::error title=P479::H4 Kconfig refused"; exit 1
+          }
+          for marker in 'P479 H4 CABLE type=%s icl=%d fcc_target=%d reason=%s' \
+                        'P479 H4 ICL_SET ma=%d code=0x%02x readback=0x%02x rc=%d' \
+                        'P479 H4 FCC_SET ma=%d code=0x%02x readback=0x%02x rc=%d' \
+                        'P479 H4 LIMIT ma=%d reason=%s' \
+                        'P479 H4 FAULT reason=%s' \
+                        'MGBATT SHADOW COMPARE would_icl=%u would_fcc=%u' \
+                        'skip_unbalanced'; do
+            grep -aFq "$marker" "$BUILD/arch/arm64/boot/Image" || {
+              echo "::error title=P479::native Image missing real H4 or CDC marker::$marker"; exit 1
+            }
+          done
           grep -Fxq 'CONFIG_SECURITY_SELINUX=y' "$BUILD/.config" || {
             echo "::error title=P477::SELinux must be enabled/enforcing-capable"; exit 1
           }
@@ -2225,7 +2251,7 @@ jobs:
             --report phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
           python3 scripts/474_hlt_pair.py \
             --normal phase447-inventory/P477-INTERNAL-NOHLT1-DO-NOT-FLASH.boot.img \
-            --hlt phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img \
+            --hlt phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img \
             --image "$BUILD/arch/arm64/boot/Image" \
             --report phase447-inventory/P474-CMDLINE-PAIR.json
           python3 - <<'P476_HLT_GATE'
@@ -2243,19 +2269,19 @@ jobs:
               raise SystemExit("P476: nohlt must be absent and every pair invariant must PASS")
           print("P476 BOOT CMDLINE nohlt=0, Image/DTB/ramdisk unchanged")
           P476_HLT_GATE
-          echo 'P478 one HLT image: A3b hardware maintained, GPIO debugfs safety, dynamic TLMM wake, canonical ECC48 ramoops, H3+shadow unchanged, NO ARM. A3c machine not yet enabled.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P479 H4-only HLT: H0/P449/H2/H3, MGBATT stage3, A3b wake fix. H4 sysfs default OFF. A3c FE/BE providers NOT ported, so NO A3c image is claimed. NO ARM.' >> "$GITHUB_STEP_SUMMARY"
           cp "$BUILD/vmlinux" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
           cp "$BUILD/System.map" phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
           readelf -SW phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux | grep -F .debug_info
           sha256sum phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
                     phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
-                    phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img \
+                    phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img \
             > phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
           {
-            printf 'P478-GPIO-TLMM-ECC48-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
+            printf 'P479-H4-ONLY-CANDIDATE run_id=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA"
             sha256sum "$BUILD/arch/arm64/boot/Image"
-            sha256sum phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img
-          } > phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
+            sha256sum phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img
+          } > phase447-inventory/P479-H4-ONLY-HLT-IMAGE-PROVENANCE.txt
           echo 'A6b DWARF vmlinux + System.map persisted with candidate, source-equivalent original #678 rebuild retained separately.' >> "$GITHUB_STEP_SUMMARY"
           sha256sum -c "$RUNNER_TEMP/p470-a3-original-boot.sha256"
           echo 'P470-A6 audited boot-v2 IPA diagnostic CANDIDATE created; FIRST FLASH NOT AUTHORIZED pending runtime DTBO and deliberate arm review.' >> "$GITHUB_STEP_SUMMARY"
@@ -2275,9 +2301,9 @@ jobs:
         if: success() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
         with:
-          name: MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM-${{ github.run_id }}-${{ github.sha }}
+          name: MANGROVE-P479-H4-ONLY-HLT-${{ github.run_id }}-${{ github.sha }}
           path: |
-            phase447b-variants/MANGROVE-P478-GPIO-TLMM-ECC48-HLT-NO-ARM.boot.img
+            phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img
             phase447-inventory/P474-CMDLINE-PAIR.json
             phase447-inventory/P474-IDLE-SOURCE.json
             phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
@@ -2291,6 +2317,10 @@ jobs:
             phase447-inventory/P477B-A3B-DT-CONTRACT.json
             scripts/477b_dt_contract_audit.py
             phase447-inventory/P478-A3C-KONA-PREFLIGHT.json
+            phase447-inventory/P479-H4-SOURCE.json
+            phase447-inventory/P479-MGBATT-SHADOW3-SOURCE.json
+            scripts/479_h4_auto.py
+            scripts/479_mgbatt_shadow3.py
             scripts/478_a3c_kona_preflight.py
             scripts/477_h3_dcp_stepped.py
             scripts/477_mgbatt_shadow_stage.py
@@ -2310,7 +2340,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P479-H4-ONLY-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
@@ -2360,7 +2390,7 @@ jobs:
             phase447-inventory/P473-B2-SOURCE.json
             phase447-inventory/P473-B3-SOURCE.json
             phase447-inventory/P472-A0-NATIVE-SOURCE.json
-            phase447-inventory/P478-GPIO-TLMM-ECC48-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P479-H4-ONLY-HLT-IMAGE-PROVENANCE.txt
             phase447-inventory/P472-A1-TG-APR-SOURCE.json
             phase447-inventory/P472-A1-DONOR-INVENTORY.json
             phase447-inventory/P471-D1-COMPILED.config
