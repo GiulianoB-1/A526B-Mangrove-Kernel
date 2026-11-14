@@ -257,6 +257,72 @@ def adapt_510_api(rel,data):
         if data.count(old)!=expected or "snd_soc_component_read(" in data:
             raise RuntimeError("P472 A3b WCD938x read32 donor drift: "+rel)
         data=data.replace(old,"snd_soc_component_read(")
+    elif rel == "soc/swr-wcd-ctrl.c":
+        # The 5.4 donor has two distinct real SWR master drivers,
+        # qcom,swr-wcd and qcom,swr-mstr, both exporting the same
+        # swrm_wcd_notify symbol. Preserve this WCD controller's
+        # implementation with a private unique export; the public
+        # ABI below routes by the actual OF compatible.
+        if (data.count("swrm_wcd_notify(")!=2 or
+                data.count("EXPORT_SYMBOL(swrm_wcd_notify);")!=1 or
+                data.count('"qcom,swr-wcd"')!=1):
+            raise RuntimeError("P472 A3b WCD SoundWire symbol donor drift")
+        data=data.replace("swrm_wcd_notify(","swrm_wcd_notify_wcd(")
+        data=data.replace("EXPORT_SYMBOL(swrm_wcd_notify);",
+                          "EXPORT_SYMBOL(swrm_wcd_notify_wcd);",1)
+        old=(
+            '\tdefault:\n'
+            '\t\tdev_err(swrm->dev, "%s: swr master unknown id %d\\n",\n'
+            '\t\t\t__func__, id);\n'
+            '\t\tbreak;'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P472 A3b WCD SoundWire unsupported command drift")
+        data=data.replace(old,old.replace('\t\tbreak;',
+                  '\t\tret = -EOPNOTSUPP;\n\t\tbreak;'),1)
+    elif rel == "soc/swr-mstr-ctrl.c":
+        # Keep the canonical SWR notification ABI for the LPASS
+        # master and dispatch WCD child devices to their separate
+        # real implementation, never cast one controller's drvdata
+        # to the other's incompatible struct.
+        symbol="int swrm_wcd_notify(struct platform_device *pdev, u32 id, void *data)"
+        if (data.count(symbol)!=1 or
+                data.count("EXPORT_SYMBOL(swrm_wcd_notify);")!=1 or
+                data.count('"qcom,swr-mstr"')!=1):
+            raise RuntimeError("P472 A3b LPASS SoundWire notification ABI drift")
+        start=data.index(symbol)
+        end=data.index("EXPORT_SYMBOL(swrm_wcd_notify);",start)
+        part=data[start:end]
+        old="\tswrm = platform_get_drvdata(pdev);"
+        dispatch=(
+            '\t/* Both real 5.4 controllers exist; route by real DT compatible. */\n'
+            '\tif (of_device_is_compatible(pdev->dev.of_node, "qcom,swr-wcd"))\n'
+            '\t\treturn swrm_wcd_notify_wcd(pdev, id, data);\n'
+            '\tif (!of_device_is_compatible(pdev->dev.of_node, "qcom,swr-mstr")) {\n'
+            '\t\tdev_err(&pdev->dev, "P472 A3b SWR unsupported controller\\n");\n'
+            '\t\treturn -ENODEV;\n'
+            '\t}\n'
+        )
+        if part.count(old)!=1 or part.count("if (!pdev) {")!=1:
+            raise RuntimeError("P472 A3b LPASS SWR fail-closed dispatch drift")
+        part=part.replace(old,dispatch+old,1)
+        data=data[:start]+part+data[end:]
+        # The donor used the same driver.name for two different
+        # compatibles. Ensure platform bus name matching cannot
+        # capture the other controller before the OF match.
+        if data.count(".name = SWR_WCD_NAME,")!=1:
+            raise RuntimeError("P472 A3b LPASS SWR platform name drift")
+        data=data.replace(".name = SWR_WCD_NAME,", '.name = "swr-mstr",',1)
+        old=(
+            '\tdefault:\n'
+            '\t\tdev_err(swrm->dev, "%s: swr master unknown id %d\\n",\n'
+            '\t\t\t__func__, id);\n'
+            '\t\tbreak;'
+        )
+        if data.count(old)!=1:
+            raise RuntimeError("P472 A3b LPASS SoundWire unsupported command drift")
+        data=data.replace(old,old.replace('\t\tbreak;',
+                  '\t\tret = -EOPNOTSUPP;\n\t\tbreak;'),1)
     elif rel == "asoc/codecs/wcd-dsp-mgr.c":
         # ACK 5.10 still implements arch_setup_dma_ops() on arm64,
         # declared by linux/dma-map-ops.h rather than the older
@@ -373,6 +439,17 @@ def stage(root,tg,d54):
     if mbhc_s.count(old_mbhc)!=1:
         raise RuntimeError("P472 A3b pinned MBHC register read macro drift")
     mbhc_header.write_text(mbhc_s.replace(old_mbhc,"snd_soc_component_read(",1))
+    # The two real SoundWire masters must have separate exported
+    # entry points while preserving swrm_wcd_notify() as the public
+    # macro API. The private WCD declaration is used by the
+    # compatible-based dispatcher, not by unrelated GKI drivers.
+    swr_header=target/"include/soc/swr-wcd.h"
+    swr_text=swr_header.read_text()
+    swr_old="extern int swrm_wcd_notify(struct platform_device *pdev, u32 id, void *data);"
+    if swr_text.count(swr_old)!=1:
+        raise RuntimeError("P472 A3b pinned SoundWire public API drift")
+    swr_header.write_text(swr_text.replace(
+        swr_old,swr_old+"\nextern int swrm_wcd_notify_wcd(struct platform_device *pdev, u32 id, void *data);",1))
     # 5.4 downstream keeps these driver-required headers outside
     # techpack/audio/include. Stage pinned originals privately, never
     # edit global GKI include/ or invent ABI types/success stubs.
@@ -546,6 +623,40 @@ def check(root):
     for rel in B1+B2+B3:
         if not (target/rel).is_file():
             raise RuntimeError("P472 A3b real donor source missing "+rel)
+    # Both original SoundWire controllers are required by their
+    # distinct OF nodes. Public notify is owned exactly once, routes
+    # by compatible, and rejects unknown hardware and commands.
+    mstr=(target/"soc/swr-mstr-ctrl.c").read_text()
+    wcd=(target/"soc/swr-wcd-ctrl.c").read_text()
+    swr_h=(target/"include/soc/swr-wcd.h").read_text()
+    soc_make=(target/"soc/Makefile").read_text()
+    for code in (
+        "int swrm_wcd_notify(struct platform_device *pdev, u32 id, void *data)",
+        "EXPORT_SYMBOL(swrm_wcd_notify);",
+        'of_device_is_compatible(pdev->dev.of_node, "qcom,swr-wcd")',
+        'of_device_is_compatible(pdev->dev.of_node, "qcom,swr-mstr")',
+        "return swrm_wcd_notify_wcd(pdev, id, data);",
+        '.name = "swr-mstr",',
+        'return -ENODEV;',
+        "ret = -EOPNOTSUPP;",
+    ):
+        if mstr.count(code)!=1:
+            raise RuntimeError("P472 A3b real LPASS SWR dispatch drift: "+code)
+    for code in (
+        "int swrm_wcd_notify_wcd(struct platform_device *pdev, u32 id, void *data)",
+        "EXPORT_SYMBOL(swrm_wcd_notify_wcd);",
+        "swrm_wcd_notify_wcd(swrm->pdev, SWR_DEVICE_DOWN, NULL);",
+        "ret = -EOPNOTSUPP;",
+        '"qcom,swr-wcd"',
+        ".name = SWR_WCD_NAME,",
+    ):
+        if wcd.count(code)!=1:
+            raise RuntimeError("P472 A3b real WCD SWR dispatch drift: "+code)
+    if (swr_h.count("extern int swrm_wcd_notify(")!=1 or
+        swr_h.count("extern int swrm_wcd_notify_wcd(")!=1 or
+        soc_make.count("swr-mstr-ctrl.o")!=1 or
+        soc_make.count("swr-wcd-ctrl.o")!=1):
+        raise RuntimeError("P472 A3b dual SoundWire hardware ABI/ownership drift")
     # The pinned 5.4 WCD DSP manager public header is outside
     # techpack/audio. Select actual function declarations, never its
     # CONFIG_WCD9XXX_CODEC_CORE fallback that falsely returns success.
