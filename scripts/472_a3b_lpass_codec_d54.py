@@ -542,6 +542,15 @@ def adapt_510_api(rel,data):
             '}\n'
         )
         data=data[:i]+safe+data[j:]
+        unused=(
+            'static unsigned int lpi_regval_to_drive(u32 val)\n'
+            '{\n'
+            '\treturn (val + 1) * 2;\n'
+            '}\n\n'
+        )
+        if data.count(unused)!=1:
+            raise RuntimeError("P478 unused LPI debugfs-only drive helper drift")
+        data=data.replace(unused,"",1)
         # The native helper calls pm_runtime_get_sync() without
         # checking its return. Never access LPASS TLMM without
         # successful runtime resume and a real core clock vote.
@@ -560,6 +569,17 @@ def adapt_510_api(rel,data):
                           'return -EHOSTDOWN;\n\t}\n\tret = pm_runtime_resume_and_get(lpi_dev);',1)
         data=data.replace('if (!lpi_dev_up) {\n\t\treturn 0;\n\t}',
                           'if (!lpi_dev_up) {\n\t\treturn -EHOSTDOWN;\n\t}',1)
+        # set_mux originally had no signed errno local.
+        set_mux=(
+            'static int lpi_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned int function,\n'
+            '\t\t\t    unsigned int pin)\n'
+            '{\n'
+            '\tstruct lpi_gpio_pad *pad;\n'
+            '\tunsigned int val;'
+        )
+        if data.count(set_mux)!=1:
+            raise RuntimeError("P478 LPI mux signature donor drift")
+        data=data.replace(set_mux,set_mux+'\n\tint ret;',1)
         # The old caller ignored the read errno and would write a
         # modified -EINVAL to LPASS registers. Propagate the error.
         old=(
