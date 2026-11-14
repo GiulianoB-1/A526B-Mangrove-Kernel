@@ -960,9 +960,15 @@ def check(root):
         "irq_set_irq_wake(gpio_irq, enable);",
         "P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d",
         "skip_unbalanced",
-        "p479_wake_enabled",
         "mutex_lock(&gpio_data->p479_wake_lock)",
+        "mutex_unlock(&gpio_data->p479_wake_lock)",
+        "mutex_init(&gpio_data->p479_wake_lock)",
+        "bool p479_wake_enabled[MAX_GPIOS];",
+        "gpio_data->p479_wake_enabled[i] == enable",
+        "gpio_data->p479_wake_enabled[i] = enable;",
     ):
+        # Verify each of the three wake-state operations once, rather
+        # than counting the shared field name (declaration/read/write).
         if cdc_510.count(code)!=1:
             raise RuntimeError("P472 A3b real 5.10 GPIO IRQ wake missing: "+code)
     if ("msm_gpio_mpm_wake_set(" in cdc_510 or
