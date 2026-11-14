@@ -457,7 +457,7 @@ def adapt_510_api(rel,data):
             "\t\t\tpr_info(\"P472 A3b CDC_TLMM_WAKE pin=%d gpio=%d irq=%d en=%d rc=%d\\n\",\n"
             "\t\t\t\tpin, gpio, gpio_irq, enable, ret);\n"
             "\t\t\tif (ret < 0)\n"
-            "\t\t\t\tgoto exit;";
+            "\t\t\t\tgoto exit;"
 
         )
         if data.count(old_call)!=1:
