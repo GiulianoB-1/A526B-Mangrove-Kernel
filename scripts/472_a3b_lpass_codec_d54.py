@@ -392,7 +392,10 @@ def adapt_510_api(rel,data):
         if data.count(old_call)!=1:
             raise RuntimeError("P472 A3b CDC downstream GPIO wake call drift")
         data=data.replace(old_call,new_call,1)
-    elif rel == "soc/swr-mstr-ctrl.c":
+    # Independent adaptation: the SWR master also needs 5.10 CPU latency QoS.
+    # Do not chain this as `elif`: the earlier SWR dispatch branch already
+    # matches this exact translation unit.
+    if rel == "soc/swr-mstr-ctrl.c":
         # 5.10 CPU_IDLE split the old PM_QOS_CPU_DMA_LATENCY class
         # out into cpu_latency_qos_* functions. This preserves a real
         # kernel QoS request over its full add/update/remove lifetime.
@@ -657,6 +660,8 @@ def check(root):
         soc_make.count("swr-mstr-ctrl.o")!=1 or
         soc_make.count("swr-wcd-ctrl.o")!=1):
         raise RuntimeError("P472 A3b dual SoundWire hardware ABI/ownership drift")
+    # Stage checks below confirm both SWR notification routing and the
+    # complete real CPU latency QoS lifecycle survive in the same source.
     # The pinned 5.4 WCD DSP manager public header is outside
     # techpack/audio. Select actual function declarations, never its
     # CONFIG_WCD9XXX_CODEC_CORE fallback that falsely returns success.
