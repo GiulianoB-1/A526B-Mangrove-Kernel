@@ -483,6 +483,120 @@ def adapt_510_api(rel,data):
             raise RuntimeError("P477B CDC TLMM property donor drift")
         data=data.replace(old_tlmm,new_tlmm,1)
         data=data.replace(old_end,new_end,1)
+    if rel == "soc/pinctrl-lpi.c":
+        # /sys/kernel/debug/gpio must NOT trigger any LPASS register
+        # read. The native DBG_SHOW path was reading every pin.
+        # Render explicitly cached, non-hardware state instead.
+        if data.count("static void lpi_gpio_dbg_show_one(")!=1:
+            raise RuntimeError("P478 LPI debugfs donor layout drift")
+        i=data.index("static void lpi_gpio_dbg_show_one(")
+        j=data.index("\n#else\n#define lpi_gpio_dbg_show NULL",i)
+        original=data[i:j]
+        if ("lpi_gpio_read(pad, LPI_GPIO_REG_DIR_CTL)" not in original or
+            "lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL)" not in original):
+            raise RuntimeError("P478 LPI original debugfs MMIO path drift")
+        safe=(
+            'static void lpi_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)\n'
+            '{\n'
+            '\t/* P478: no LPASS MMIO from a debugfs read, including SSR. */\n'
+            '\tseq_printf(s, "P478 LPI gpio debugfs: %u pins; register reads disabled (ADSP/clock safety)\\n",\n'
+            '\t\t   chip->ngpio);\n'
+            '}\n'
+        )
+        data=data[:i]+safe+data[j:]
+        # The native helper calls pm_runtime_get_sync() without
+        # checking its return. Never access LPASS TLMM without
+        # successful runtime resume and a real core clock vote.
+        old='pm_runtime_get_sync(lpi_dev);'
+        if data.count(old)!=2:
+            raise RuntimeError("P478 LPI runtime PM accessor drift")
+        data=data.replace(old,
+            'ret = pm_runtime_resume_and_get(lpi_dev);\n'
+            '\tif (ret < 0)\n\t\treturn ret;',2)
+        # The original returns success for ADSP-down paths. This is
+        # unsafe because pinconf callers then use register value 0.
+        old='if (!lpi_dev_up) {'
+        if data.count(old)!=2:
+            raise RuntimeError("P478 LPI ADSP guard count drift")
+        data=data.replace('return 0;\n\t}\n\tret = pm_runtime_resume_and_get(lpi_dev);',
+                          'return -EHOSTDOWN;\n\t}\n\tret = pm_runtime_resume_and_get(lpi_dev);',1)
+        data=data.replace('if (!lpi_dev_up) {\n\t\treturn 0;\n\t}',
+                          'if (!lpi_dev_up) {\n\t\treturn -EHOSTDOWN;\n\t}',1)
+        # The old caller ignored the read errno and would write a
+        # modified -EINVAL to LPASS registers. Propagate the error.
+        old=(
+            '\tval = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n'
+            '\tval &= ~(LPI_GPIO_REG_FUNCTION_MASK);'
+        )
+        new=(
+            '\tret = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n'
+            '\tif (ret < 0)\n\t\treturn ret;\n'
+            '\tval = ret;\n'
+            '\tval &= ~(LPI_GPIO_REG_FUNCTION_MASK);'
+        )
+        if data.count(old)!=1:raise RuntimeError("P478 LPI mux read donor drift")
+        data=data.replace(old,new,1)
+        old='\tlpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);\n\treturn 0;'
+        if data.count(old)!=1:raise RuntimeError("P478 LPI mux write donor drift")
+        data=data.replace(old,'\treturn lpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);',1)
+        old=(
+            '\tval = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n'
+            '\tval &= ~(LPI_GPIO_REG_PULL_MASK'
+        )
+        new=(
+            '\tret = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n'
+            '\tif (ret < 0)\n\t\tgoto done;\n'
+            '\tval = ret;\n'
+            '\tval &= ~(LPI_GPIO_REG_PULL_MASK'
+        )
+        if data.count(old)!=1:raise RuntimeError("P478 LPI pinconf read donor drift")
+        data=data.replace(old,new,1)
+        old=(
+            '\tlpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);\n'
+            '\tlpi_gpio_write(pad, LPI_GPIO_REG_DIR_CTL,\n'
+            '\t\t       pad->output_enabled << LPI_GPIO_REG_DIR_SHIFT);\n'
+            'done:'
+        )
+        new=(
+            '\tret = lpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);\n'
+            '\tif (ret < 0)\n\t\tgoto done;\n'
+            '\tret = lpi_gpio_write(pad, LPI_GPIO_REG_DIR_CTL,\n'
+            '\t\t       pad->output_enabled << LPI_GPIO_REG_DIR_SHIFT);\n'
+            'done:'
+        )
+        if data.count(old)!=1:raise RuntimeError("P478 LPI pinconf write donor drift")
+        data=data.replace(old,new,1)
+        # The user-visible GPIO read reports an errno if the hardware
+        # is unavailable; write() paths use pinconf errno, not success.
+        old='\tvalue = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);\n\treturn value;'
+        if data.count(old)!=1:raise RuntimeError("P478 LPI GPIO get donor drift")
+        # Already returns the native helper's signed errno: retain.
+        # Generic GPIO debugfs fallback must not be used either.
+        if data.count(".dbg_show\t\t= lpi_gpio_dbg_show,")!=1:
+            raise RuntimeError("P478 LPI debugfs handler owner drift")
+    if rel == "soc/pinctrl-wcd.c":
+        # The WCD regmap may be powered down when gpio debugfs runs.
+        # GPIOLIB's default dbg_show invokes ->get() for requested
+        # pins. Override that with a deliberately register-free view.
+        old='static const struct gpio_chip wcd_gpio_chip = {'
+        if data.count(old)!=1:raise RuntimeError("P478 WCD GPIO chip donor drift")
+        safe=(
+            '#ifdef CONFIG_DEBUG_FS\n'
+            '#include <linux/seq_file.h>\n'
+            'static void wcd_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)\n'
+            '{\n'
+            '\tseq_printf(s, "P478 WCD gpio debugfs: %u pins; register reads disabled (clock safety)\\n",\n'
+            '\t\t   chip->ngpio);\n'
+            '}\n'
+            '#else\n'
+            '#define wcd_gpio_dbg_show NULL\n'
+            '#endif\n\n'
+        )
+        data=data.replace(old,safe+old,1)
+        if data.count('\t.get = wcd_gpio_get,')!=1:
+            raise RuntimeError("P478 WCD gpio get owner drift")
+        data=data.replace('\t.get = wcd_gpio_get,',
+                          '\t.get = wcd_gpio_get,\n\t.dbg_show = wcd_gpio_dbg_show,',1)
     # Independent adaptation: the SWR master also needs 5.10 CPU latency QoS.
     # Do not chain this as `elif`: the earlier SWR dispatch branch already
     # matches this exact translation unit.
@@ -706,6 +820,18 @@ def check(root):
                    "wcd9xxx-core-init.o"):
         if legacy in init or legacy in (target/"asoc/codecs/Makefile").read_text():
             raise RuntimeError("P477B legacy WCD9xxx core/IRQ registration forbidden")
+    # P478 safety: debugfs never reads LPASS/WCD GPIO hardware.
+    lpi=(target/"soc/pinctrl-lpi.c").read_text()
+    wcd=(target/"soc/pinctrl-wcd.c").read_text()
+    for expected in ("P478 LPI gpio debugfs:", "pm_runtime_resume_and_get(lpi_dev);",
+                     "return -EHOSTDOWN;", "return lpi_gpio_write("):
+        if expected not in lpi:
+            raise RuntimeError("P478 LPASS guarded GPIO access missing: "+expected)
+    if ("static void lpi_gpio_dbg_show_one(" in lpi or
+        "pm_runtime_get_sync(lpi_dev)" in lpi or
+        "P478 WCD gpio debugfs:" not in wcd or
+        ".dbg_show = wcd_gpio_dbg_show," not in wcd):
+        raise RuntimeError("P478 unsafe GPIO debugfs register access remains")
     # WCD938x must use real IRQ and Class-H implementations. The
     # SM7325 5.4 fallback headers contain malformed/no-op stubs, while
     # B3 intentionally builds wcd-irq.c and wcd-clsh.c. Select their
