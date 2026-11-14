@@ -408,7 +408,7 @@ def stage(root, tg):
       "    bool p476_h2_enabled, p476_h2_fast;\n"
       "#if IS_ENABLED(CONFIG_P479_H4)\n"
       "    bool p479_h4_auto,p479_h4_ready,p479_h4_faulted;\n"
-    bool p479_h4_rearm_allowed,p479_h4_saw_unplug;\n"
+      "    bool p479_h4_rearm_allowed,p479_h4_saw_unplug;\n"
       "    const char *p479_h4_pending,*p479_h4_type;\n"
       "    unsigned long p479_h4_seen;\n"
       "    int p479_h4_applied_icl,p479_h4_applied_fcc;\n"
