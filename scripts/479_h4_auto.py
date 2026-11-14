@@ -433,7 +433,13 @@ def stage(root, tg):
       "static void p476_h2_tick(struct a52d_fg *fg,int bat,int chg)",
       H4+"\nstatic void p476_h2_tick(struct a52d_fg *fg,int bat,int chg)",
       "H4 clock+current controller before H2")
+    # H3 returns unconditionally when selected. H4 opt-in must dispatch
+    # BEFORE that return, otherwise the compiler drops the current tick.
     s=one(s,
+      "#if IS_ENABLED(CONFIG_P477_H3)\n"
+      "    p477_h3_tick(fg,bat,chg);\n"
+      "    return;\n"
+      "#endif\n"
       "\t/* A 2-second H0 guard pass and H0 CHARGING status are prerequisites. */",
       "#if IS_ENABLED(CONFIG_P479_H4)\n"
       "    if (fg->p479_h4_auto) {\n"
@@ -441,8 +447,12 @@ def stage(root, tg):
       "        return;\n"
       "    }\n"
       "#endif\n"
+      "#if IS_ENABLED(CONFIG_P477_H3)\n"
+      "    p477_h3_tick(fg,bat,chg);\n"
+      "    return;\n"
+      "#endif\n"
       "\t/* A 2-second H0 guard pass and H0 CHARGING status are prerequisites. */",
-      "H2 manual preserved when auto off")
+      "H4 automatic dispatch before H3 manual return")
     s=one(s,
       "    /* Track ten consecutive seconds of both real physical NTCs valid. */",
       "    p479_h4_pre_tick(fg);\n"
@@ -500,6 +510,21 @@ def check(root):
                    "P479_H4_CABLE_REARM"):
         if needle not in s:
             raise RuntimeError("P479 H4 source gate missing "+needle)
+    # Verify H4 remains reachable with both P477_H3 and P479_H4=y.
+    dispatch = (
+        "#if IS_ENABLED(CONFIG_P479_H4)\n"
+        "    if (fg->p479_h4_auto) {\n"
+        "        p479_h4_tick(fg,bat,chg);\n"
+        "        return;\n"
+        "    }\n"
+        "#endif\n"
+        "#if IS_ENABLED(CONFIG_P477_H3)\n"
+        "    p477_h3_tick(fg,bat,chg);\n"
+        "    return;\n"
+        "#endif\n"
+    )
+    if s.count(dispatch) != 1:
+        raise RuntimeError("P479 H4 tick unreachable behind H3 return")
     if s.count("i2c_smbus_write_byte_data(") != 2:
         raise RuntimeError("P479 H4 added a second raw I2C write callsite")
     cfg=k.split("config P479_H4",1)[1].split("config ",1)[0]
