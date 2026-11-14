@@ -637,7 +637,7 @@ def check(root):
         'of_device_is_compatible(pdev->dev.of_node, "qcom,swr-mstr")',
         "return swrm_wcd_notify_wcd(pdev, id, data);",
         '.name = "swr-mstr",',
-        'return -ENODEV;',
+        "P472 A3b SWR unsupported controller",
         "ret = -EOPNOTSUPP;",
     ):
         if mstr.count(code)!=1:
