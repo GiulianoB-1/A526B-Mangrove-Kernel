@@ -37,6 +37,9 @@ def validate(path):
         raise RuntimeError("P462 final ramoops nodes are not exactly canonical: "+repr(paths))
     if run("fdtget","-t","s",path,TARGET,"compatible")!="ramoops":
         raise RuntimeError("P462 canonical node lacks ramoops compatible")
+    # P478: canonical reservation must actually bind the ramoops driver.
+    if run("fdtget","-t","s",path,TARGET,"status")!="okay":
+        raise RuntimeError("P478 canonical ramoops is not status=okay")
     if cells(path,TARGET,"reg")!=PHYS:
         raise RuntimeError("P462 canonical ramoops physical region drift")
     if cells(path,TARGET,"ecc-size")!=[48]:
@@ -44,7 +47,7 @@ def validate(path):
     for k in ZONES:
         if cells(path,TARGET,k)!=[0x40000]:
             raise RuntimeError("P462 TG 256KiB "+k+" missing")
-    return {"node":TARGET,"ecc_size":48,"reg":PHYS,
+    return {"node":TARGET,"ecc_size":48,"status":"okay","reg":PHYS,
             "sizes":{k:0x40000 for k in ZONES},
             "total_zone_bytes":0x100000,"overlapping_node_count":1,
             "runtime_pstore_registered":False}
@@ -69,6 +72,9 @@ def patch(raw):
         if TARGET not in nodes:
             run("fdtput","-c",f,TARGET)
         run("fdtput","-t","s",f,TARGET,"compatible","ramoops")
+        # Explicitly enable the single ECC48 consumer; never add a
+        # second overlapping ramoops device.
+        run("fdtput","-t","s",f,TARGET,"status","okay")
         run("fdtput","-t","x",f,TARGET,"reg",*[hex(v) for v in PHYS])
         run("fdtput","-t","x",f,TARGET,"ecc-size","0x30")
         for k in ZONES:
