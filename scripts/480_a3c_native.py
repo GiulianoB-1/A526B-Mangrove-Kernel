@@ -197,6 +197,171 @@ def link_inventory(tg, d54):
             ],
             "not_hardware_verified": True}
 
+def adapt_510_pcm(source):
+    """Real 5.4 snd_pcm_ops callbacks, adapted to ACK 5.10 component methods.
+
+    Preserve every original callback and its return code. The ACK component
+    receives an additional component pointer; do not turn old functions
+    into no-op success stubs.
+    """
+    old = re.compile(r'static const struct snd_pcm_ops msm_pcm_ops = \{[\s\S]*?\n\};')
+    matches = list(old.finditer(source))
+    if len(matches) != 1:
+        raise RuntimeError("P480 expected exactly one PCM ops table")
+    callbacks = (
+        ("int", "open", "struct snd_pcm_substream *substream",
+         "msm_pcm_open(substream)"),
+        ("int", "close", "struct snd_pcm_substream *substream",
+         "msm_pcm_close(substream)"),
+        ("int", "ioctl",
+         "struct snd_pcm_substream *substream, unsigned int cmd, void *arg",
+         "msm_pcm_ioctl(substream, cmd, (void __user *)arg)"),
+        ("int", "hw_params",
+         "struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params",
+         "msm_pcm_hw_params(substream, params)"),
+        ("int", "prepare", "struct snd_pcm_substream *substream",
+         "msm_pcm_prepare(substream)"),
+        ("int", "trigger", "struct snd_pcm_substream *substream, int cmd",
+         "msm_pcm_trigger(substream, cmd)"),
+        ("snd_pcm_uframes_t", "pointer", "struct snd_pcm_substream *substream",
+         "msm_pcm_pointer(substream)"),
+        ("int", "copy_user",
+         "struct snd_pcm_substream *substream, int channel, unsigned long pos, "
+         "void __user *buf, unsigned long bytes",
+         "msm_pcm_copy(substream, channel, pos, buf, bytes)"),
+        ("int", "mmap",
+         "struct snd_pcm_substream *substream, struct vm_area_struct *vma",
+         "msm_pcm_mmap(substream, vma)"),
+    )
+    wrappers = "\n/* P480: real PCM callbacks translated to ACK 5.10 ASoC. */\n"
+    for ret, name, params, call in callbacks:
+        wrappers += ("static %s p480_pcm_%s(struct snd_soc_component *component, "
+                     "%s)\n{\n\treturn %s;\n}\n" %
+                     (ret, name, params, call))
+    wrappers += (
+        "static int p480_pcm_construct(struct snd_soc_component *component,\n"
+        "\t\tstruct snd_soc_pcm_runtime *rtd)\n"
+        "{\n\treturn msm_asoc_pcm_new(rtd);\n}\n"
+    )
+    # The constructor's target function is defined after the old ops table:
+    # avoid an implicit declaration with an exact prototype.
+    wrappers = (
+        "static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd);\n" +
+        wrappers
+    )
+    source = source[:matches[0].start()] + wrappers + source[matches[0].end():]
+    old_component = (
+        "\t.ops\t\t= &msm_pcm_ops,\n"
+        "\t.pcm_new\t= msm_asoc_pcm_new,"
+    )
+    if source.count(old_component) != 1:
+        raise RuntimeError("P480 PCM 5.4 component ops layout drift")
+    component_ops = "\n".join(
+        "\t.%s = p480_pcm_%s," % (name, name)
+        for _, name, _, _ in callbacks
+    ) + "\n\t.pcm_construct = p480_pcm_construct,"
+    source = source.replace(old_component, component_ops, 1)
+    if ".pcm_new" in source or "=&msm_pcm_ops" in source:
+        raise RuntimeError("P480 old PCM component API survived")
+    return source
+
+
+def compress_compat_header(d54):
+    """Use exact 5.4 donor extension values; never overwrite global ACK UAPI."""
+    params = (d54 / "include/uapi/sound/compress_params.h").read_text()
+    offload = (d54 / "include/uapi/sound/compress_offload.h").read_text()
+    needed = (
+        "SND_AUDIOCODEC_AC3", "SND_AUDIOCODEC_EAC3", "SND_AUDIOCODEC_DTS",
+        "SND_AUDIOCODEC_MP2", "SND_AUDIOCODEC_TRUEHD",
+        "SNDRV_COMPRESS_RENDER_MODE_AUDIO_MASTER",
+        "SNDRV_COMPRESS_RENDER_MODE_STC_MASTER",
+        "SNDRV_COMPRESS_CLK_REC_MODE_NONE",
+        "SNDRV_COMPRESS_CLK_REC_MODE_AUTO",
+        "COMPRESSED_TIMESTAMP_FLAG",
+    )
+    src = params + "\n" + offload
+    text = ("/* SPDX-License-Identifier: GPL-2.0-only */\n"
+            "/* P480: exact SM7325 compression extension ABI constants.\n"
+            " * Private to the A3c driver. Do not change the GKI kernel UAPI.\n"
+            " */\n"
+            "#ifndef __P480_COMPRESS_ABI_H\n"
+            "#define __P480_COMPRESS_ABI_H\n"
+            "#include <linux/types.h>\n")
+    for name in needed:
+        m = re.findall(r"(?m)^#define\s+" + name + r"\s+([^\n]+)", src)
+        if len(m) != 1:
+            raise RuntimeError("P480 pinned compression extension absent " + name)
+        text += "#ifndef %s\n#define %s %s\n#endif\n" % (name, name, m[0])
+    for key, value in (
+        ("SNDRV_COMPRESS_RENDER_MODE", 4),
+        ("SNDRV_COMPRESS_CLK_REC_MODE", 5),
+        ("SNDRV_COMPRESS_RENDER_WINDOW", 6),
+    ):
+        if not re.search(r"\b" + key + r"\s*=\s*" + str(value) + r"\s*,",
+                         offload):
+            raise RuntimeError("P480 pinned compress metadata key drift " + key)
+        text += "#ifndef %s\n#define %s %d\n#endif\n" % (key, key, value)
+    m = re.search(r"struct snd_codec_metadata \{[\s\S]*?\n\};", params)
+    if not m or m.group(0).count("__u32") != 3 or "__u64 timestamp;" not in m.group(0):
+        raise RuntimeError("P480 pinned codec buffer metadata ABI drift")
+    text += "#ifndef COMPRESSED_TIMESTAMP_FLAG"  # defined above, use separate guard
+    text = text[:text.rfind("#ifndef COMPRESSED_TIMESTAMP_FLAG")]
+    # mainline 5.10 does not declare this donor-only metadata payload.
+    text += m.group(0) + "\n#endif /* __P480_COMPRESS_ABI_H */\n"
+    return text
+
+
+def adapt_510_compress(source):
+    """Bridge the real 5.4 snd_compr_ops to 5.10 snd_compress_ops."""
+    old = re.compile(r'static struct snd_compr_ops msm_compr_ops = \{[\s\S]*?\n\};')
+    matches = list(old.finditer(source))
+    if len(matches) != 1:
+        raise RuntimeError("P480 missing real donor compress ops")
+    callbacks = (
+        ("open", "struct snd_compr_stream *stream", "msm_compr_open(stream)"),
+        ("free", "struct snd_compr_stream *stream", "msm_compr_free(stream)"),
+        ("trigger", "struct snd_compr_stream *stream, int cmd",
+         "msm_compr_trigger(stream, cmd)"),
+        ("pointer", "struct snd_compr_stream *stream, struct snd_compr_tstamp *ts",
+         "msm_compr_pointer(stream, ts)"),
+        ("set_params", "struct snd_compr_stream *stream, struct snd_compr_params *params",
+         "msm_compr_set_params(stream, params)"),
+        ("set_metadata", "struct snd_compr_stream *stream, struct snd_compr_metadata *meta",
+         "msm_compr_set_metadata(stream, meta)"),
+        ("get_metadata", "struct snd_compr_stream *stream, struct snd_compr_metadata *meta",
+         "msm_compr_get_metadata(stream, meta)"),
+        ("ack", "struct snd_compr_stream *stream, size_t bytes",
+         "msm_compr_ack(stream, bytes)"),
+        ("copy", "struct snd_compr_stream *stream, char __user *buf, size_t count",
+         "msm_compr_copy(stream, buf, count)"),
+        ("get_caps", "struct snd_compr_stream *stream, struct snd_compr_caps *caps",
+         "msm_compr_get_caps(stream, caps)"),
+        ("get_codec_caps",
+         "struct snd_compr_stream *stream, struct snd_compr_codec_caps *codec",
+         "msm_compr_get_codec_caps(stream, codec)"),
+    )
+    wrapper = "\n/* P480: 5.10 component gets an extra pointer. Real callbacks stay. */\n"
+    for name, params, call in callbacks:
+        wrapper += (
+            "static int p480_compr_%s(struct snd_soc_component *component, "
+            "%s)\n{\n\treturn %s;\n}\n" % (name, params, call)
+        )
+    wrapper += "static const struct snd_compress_ops p480_compr_ops = {\n"
+    wrapper += "".join("\t.%s = p480_compr_%s,\n" % (name, name)
+                       for name, _, _ in callbacks)
+    wrapper += "};"
+    source = source[:matches[0].start()] + wrapper + source[matches[0].end():]
+    old_assign = ".compr_ops\t= &msm_compr_ops,"
+    if source.count(old_assign) != 1:
+        raise RuntimeError("P480 compress 5.4 component API changed")
+    source = source.replace(old_assign, ".compress_ops = &p480_compr_ops,", 1)
+    inc = "#include <sound/compress_driver.h>"
+    if source.count(inc) != 1:
+        raise RuntimeError("P480 compress include anchor drift")
+    source = source.replace(inc, inc + '\n#include "p480-compress-abi.h"', 1)
+    return source
+
+
 def adapt_header(content):
     """Drop only false WCD937x and missing SWR-DMIC alternatives.
     Preserve actual WCD938x/RX/TX/VA codec entries. No dummy replacements.
@@ -408,6 +573,7 @@ def stage(root, tg, d54, report):
         to = dest / rel
         to.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(frm, to)
+    (dest / "p480-compress-abi.h").write_text(compress_compat_header(d54))
     log_names = {}
     for name in PROVIDERS:
         f = dest / name
@@ -416,6 +582,10 @@ def stage(root, tg, d54, report):
             if f.stat().st_size < 500_000:
                 raise RuntimeError("P480 truncated real routing provider")
         src = f.read_text()
+        if name == "msm-pcm-q6-v2.c":
+            src = adapt_510_pcm(src)
+        if name == "msm-compress-q6-v2.c":
+            src = adapt_510_compress(src)
         if name == "platform_init.c":
             # The 5.4 all-platform initializer calls unported voice,
             # CVD, HDMI and LSM functions. Never import that behavior.
@@ -529,6 +699,14 @@ def check(root):
                 "linux/msm_ion_ids.h"):
         if not (dest / "include" / rel).is_file():
             raise RuntimeError("P480 pinned ION donor header missing " + rel)
+    pcm=(dest / "msm-pcm-q6-v2.c").read_text()
+    compr=(dest / "msm-compress-q6-v2.c").read_text()
+    if ".pcm_construct = p480_pcm_construct" not in pcm:
+        raise RuntimeError("P480 real PCM component callback bridge missing")
+    if ".compress_ops = &p480_compr_ops" not in compr:
+        raise RuntimeError("P480 real compress callback bridge missing")
+    if "SND_AUDIOCODEC_AC3" not in (dest / "p480-compress-abi.h").read_text():
+        raise RuntimeError("P480 pinned compress ABI absent")
     init=(dest / "platform_init.c").read_text()
     for forbidden in ("msm_voice_host_init(", "msm_pcm_voice_init(",
                       "msm_pcm_voip_init(", "msm_lsm_client_init(",
