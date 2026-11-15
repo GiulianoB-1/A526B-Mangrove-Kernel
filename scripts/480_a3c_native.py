@@ -872,7 +872,9 @@ def stage(root, tg, d54, report):
                 "codecs/wcd937x/wcd937x.h",
                 "codecs/wcd937x/wcd937x-mbhc.h",
                 "codecs/wcd938x/wcd938x.h",
-                "codecs/wcd938x/wcd938x-mbhc.h"):
+                "codecs/wcd938x/wcd938x-mbhc.h",
+                "codecs/bolero/bolero-cdc.h",
+                "codecs/bolero/wsa-macro.h"):
         frm = donor / rel
         if not frm.is_file():
             raise RuntimeError("P480 pinned machine header missing " + rel)
@@ -1036,6 +1038,15 @@ def check(root):
         header = dest / rel
         if not header.is_file() or required not in header.read_text():
             raise RuntimeError("P480 pinned WSA declaration dependency missing " + rel)
+    # These are required by Kona's unconditional includes, even though
+    # the WSA and alternate codec implementations remain unported.
+    for rel, required in (
+        ("codecs/bolero/bolero-cdc.h", "BOLERO_CDC_H"),
+        ("codecs/bolero/wsa-macro.h", "WSA_MACRO_H"),
+    ):
+        header = dest / rel
+        if not header.is_file() or required not in header.read_text():
+            raise RuntimeError("P480 pinned Kona bolero declaration missing " + rel)
     pcm=(dest / "msm-pcm-q6-v2.c").read_text()
     compr=(dest / "msm-compress-q6-v2.c").read_text()
     # No local stubs may shadow the built-in QTI PP provider definitions.
