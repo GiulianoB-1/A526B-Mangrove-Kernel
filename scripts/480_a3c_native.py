@@ -319,7 +319,20 @@ def adapt_510_afe(source):
 
 
 def adapt_510_hostless(source):
-    """Hostless prepare still delegates to actual 5.4 callback."""
+    """Bridge the real hostless prepare and CPU latency QoS API to 5.10."""
+    # Pinned 5.4 removes the PCM substream's CPU latency request using
+    # pm_qos_remove_request(). ACK 5.10 renamed this CPU-scoped helper.
+    old_qos = "pm_qos_remove_request(&substream->latency_pm_qos_req);"
+    if source.count(old_qos) != 1:
+        raise RuntimeError("P480 pinned hostless CPU latency QoS call drift")
+    source = source.replace(
+        old_qos,
+        "cpu_latency_qos_remove_request(&substream->latency_pm_qos_req);", 1)
+    pcm_header = "#include <sound/pcm.h>"
+    if source.count(pcm_header) != 1:
+        raise RuntimeError("P480 hostless PCM header drift")
+    source = source.replace(
+        pcm_header, "#include <linux/pm_qos.h>\n" + pcm_header, 1)
     old = re.compile(r'static const struct snd_pcm_ops msm_pcm_hostless_ops = '
                      r'\{[\s\S]*?\n\};')
     m = list(old.finditer(source))
@@ -805,6 +818,12 @@ def check(root):
         raise RuntimeError("P480 real compress callback bridge missing")
     if "SND_AUDIOCODEC_AC3" not in (dest / "p480-compress-abi.h").read_text():
         raise RuntimeError("P480 pinned compress ABI absent")
+    hostless = (dest / "msm-pcm-hostless.c").read_text()
+    if ("cpu_latency_qos_remove_request(&substream->latency_pm_qos_req)"
+            not in hostless or
+            "pm_qos_remove_request(" in hostless or
+            "#include <linux/pm_qos.h>" not in hostless):
+        raise RuntimeError("P480 hostless CPU latency QoS 5.10 bridge missing")
     init=(dest / "platform_init.c").read_text()
     for forbidden in ("msm_voice_host_init(", "msm_pcm_voice_init(",
                       "msm_pcm_voip_init(", "msm_lsm_client_init(",
