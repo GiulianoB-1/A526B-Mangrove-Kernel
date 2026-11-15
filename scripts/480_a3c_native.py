@@ -863,10 +863,14 @@ def stage(root, tg, d54, report):
     for hdr in donor.glob("*.h"):
         if hdr.name != "msm_dailink.h":
             shutil.copy2(hdr, dest / hdr.name)
-    # Only headers, never the unported WSA/WCD937x implementations.
+    # Import only real pinned codec API headers needed by Kona.
+    # In particular WCD938x is the selected A52 physical codec.
+    # Do not import unported WSA/WCD937x implementations.
     for rel in ("codecs/wsa881x.h", "codecs/wsa883x/wsa883x.h",
                 "codecs/wcd937x/wcd937x.h",
-                "codecs/wcd937x/wcd937x-mbhc.h"):
+                "codecs/wcd937x/wcd937x-mbhc.h",
+                "codecs/wcd938x/wcd938x.h",
+                "codecs/wcd938x/wcd938x-mbhc.h"):
         frm = donor / rel
         if not frm.is_file():
             raise RuntimeError("P480 pinned machine header missing " + rel)
@@ -1014,6 +1018,13 @@ def check(root):
                 "linux/msm_ion_ids.h"):
         if not (dest / "include" / rel).is_file():
             raise RuntimeError("P480 pinned ION donor header missing " + rel)
+    for rel, required in (
+        ("codecs/wcd938x/wcd938x.h", "WCD938X_DRV_NAME"),
+        ("codecs/wcd938x/wcd938x-mbhc.h", "wcd938x_mbhc_hs_detect"),
+    ):
+        header = dest / rel
+        if not header.is_file() or required not in header.read_text():
+            raise RuntimeError("P480 genuine WCD938x Kona header missing " + rel)
     pcm=(dest / "msm-pcm-q6-v2.c").read_text()
     compr=(dest / "msm-compress-q6-v2.c").read_text()
     # No local stubs may shadow the built-in QTI PP provider definitions.
