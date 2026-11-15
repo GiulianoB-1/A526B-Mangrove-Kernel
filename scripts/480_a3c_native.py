@@ -984,7 +984,11 @@ def check(root):
     for driver_name, expected in (("msm-dai-fe.c", 185),
                                   ("msm-dai-q6-v2.c", 264)):
         dai = (dest / driver_name).read_text()
-        if (dai.count('{"') != expected or
+        header = "static const struct p480_aif_link p480_aif_links[] = {"
+        if dai.count(header) != 1:
+            raise RuntimeError("P480 private AIF table missing " + driver_name)
+        table = dai.split(header, 1)[1].split("};", 1)[0]
+        if (table.count("\n\t{") != expected or
                 "p480_aif_name(" not in dai or
                 re.search(r'\.aif_name\b', dai)):
             raise RuntimeError("P480 native AIF routes missing " + driver_name)
