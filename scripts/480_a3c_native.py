@@ -516,10 +516,12 @@ def adapt_510_dai_aif(source, driver_name):
     while 5.10 exposes only stream_name. Keep the original stream widget
     names and transfer vendor AIF endpoints to a private lookup table.
     """
-    if driver_name not in ("msm-dai-q6-v2.c", "msm-dai-fe.c"):
+    if driver_name not in ("msm-dai-q6-v2.c", "msm-dai-fe.c",
+                            "msm-dai-stub-v2.c"):
         raise RuntimeError("P480 unexpected AIF adapter driver")
     expected = {"msm-dai-q6-v2.c": (264, 4),
-                "msm-dai-fe.c": (185, 2)}
+                "msm-dai-fe.c": (185, 2),
+                "msm-dai-stub-v2.c": (8, 2)}
     number, per_direction = expected[driver_name]
     pair_re = re.compile(
         r'(?m)^([ \t]*)\.stream_name\s*=\s*"([^"]+)",\s*\n'
@@ -547,9 +549,14 @@ def adapt_510_dai_aif(source, driver_name):
             old, "p480_aif_name(&dai->driver->%s)" % direction)
     if re.search(r'\.aif_name\b', source):
         raise RuntimeError("P480 obsolete snd_soc_pcm_stream.aif_name remains")
-    anchor = ("static int fe_dai_probe(struct snd_soc_dai *dai)" if
-              driver_name == "msm-dai-fe.c" else
-              "static int msm_dai_q6_dai_add_route(struct snd_soc_dai *dai)")
+    anchors = {
+        "msm-dai-fe.c": "static int fe_dai_probe(struct snd_soc_dai *dai)",
+        "msm-dai-q6-v2.c":
+            "static int msm_dai_q6_dai_add_route(struct snd_soc_dai *dai)",
+        "msm-dai-stub-v2.c":
+            "static int msm_dai_stub_add_route(struct snd_soc_dai *dai)",
+    }
+    anchor = anchors[driver_name]
     if source.count(anchor) != 1 or source.count(
             "#include <linux/init.h>") != 1:
         raise RuntimeError("P480 AIF route insertion anchor drift")
@@ -883,7 +890,8 @@ def stage(root, tg, d54, report):
             src = adapt_510_hostless(src)
         if name == "msm-compress-q6-v2.c":
             src = adapt_510_compress(src)
-        if name in ("msm-dai-fe.c", "msm-dai-q6-v2.c"):
+        if name in ("msm-dai-fe.c", "msm-dai-q6-v2.c",
+                    "msm-dai-stub-v2.c"):
             src = adapt_510_dai_aif(src, name)
         if name == "msm-dai-q6-v2.c":
             src = adapt_510_dai_mute(src)
@@ -1024,7 +1032,8 @@ def check(root):
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
     for driver_name, expected in (("msm-dai-fe.c", 185),
-                                  ("msm-dai-q6-v2.c", 264)):
+                                  ("msm-dai-q6-v2.c", 264),
+                                  ("msm-dai-stub-v2.c", 8)):
         dai = (dest / driver_name).read_text()
         header = "static const struct p480_aif_link p480_aif_links[] = {"
         if dai.count(header) != 1:
