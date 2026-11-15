@@ -267,7 +267,13 @@ def adapt_510_pcm(source):
 
 
 def adapt_510_afe(source):
-    """Keep real AFE PCM callbacks while adapting the component API."""
+    """Keep real AFE callbacks and migrate single CPU DAI access to 5.10."""
+    # The pinned 5.4 AFE provider uses the removed rtd->cpu_dai member.
+    # 5.10 stores DAIs in arrays accessed with asoc_rtd_to_cpu().
+    legacy = "rtd->cpu_dai"
+    if source.count(legacy) != 6:
+        raise RuntimeError("P480 pinned AFE CPU DAI ABI drift")
+    source = source.replace(legacy, "asoc_rtd_to_cpu(rtd, 0)")
     old = re.compile(r'static const struct snd_pcm_ops msm_afe_ops = \{[\s\S]*?\n\};')
     m = list(old.finditer(source))
     if len(m) != 1:
@@ -609,6 +615,14 @@ static void p480_log_real_device_counts(struct snd_soc_card *card)
 def adapt_machine(source):
     if '#include "msm_dailink.h"' not in source:
         raise RuntimeError("P480 Kona component array ABI missing")
+    # The pinned 5.4 card uses single DAI fields removed from the
+    # 5.10 runtime struct. Use the first CPU and codec DAI explicitly.
+    if source.count("rtd->cpu_dai") != 12:
+        raise RuntimeError("P480 pinned Kona CPU DAI ABI drift")
+    if source.count("rtd->codec_dai") != 5:
+        raise RuntimeError("P480 pinned Kona codec DAI ABI drift")
+    source = source.replace("rtd->cpu_dai", "asoc_rtd_to_cpu(rtd, 0)")
+    source = source.replace("rtd->codec_dai", "asoc_rtd_to_codec(rtd, 0)")
     # Exclude the physical WSA speaker AUX devices but keep the real
     # WCD938x AUX device needed by the headset microphone path.
     source = one(source,
@@ -814,6 +828,14 @@ def check(root):
     ):
         if needle not in (dest / filename).read_text():
             raise RuntimeError("P480 real AFE/noirq/hostless component API bridge missing " + filename)
+    afe = (dest / "msm-pcm-afe-v2.c").read_text()
+    if ("rtd->cpu_dai" in afe or
+            afe.count("asoc_rtd_to_cpu(rtd, 0)") != 6):
+        raise RuntimeError("P480 5.10 AFE CPU DAI accessor bridge missing")
+    if ("rtd->cpu_dai" in s or "rtd->codec_dai" in s or
+            s.count("asoc_rtd_to_cpu(rtd, 0)") != 12 or
+            s.count("asoc_rtd_to_codec(rtd, 0)") != 5):
+        raise RuntimeError("P480 5.10 Kona CPU/codec DAI accessor bridge missing")
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
     if "SND_AUDIOCODEC_AC3" not in (dest / "p480-compress-abi.h").read_text():
