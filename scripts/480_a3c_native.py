@@ -954,6 +954,10 @@ subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/include/uapi
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3c
 subdir-ccflags-y += -I$(srctree)/drivers/soc/qcom/p472_tg_audio/a3c/codecs
 subdir-ccflags-y += -DCONFIG_SND_SOC_QDSP6V2=1
+# The genuine msm-qti-pp-config.o is built into A3c. Its donor header must
+# expose the matching real functions, not the CONFIG_QTI_PP=n inline stubs.
+# Scope this feature selection to A3c only and keep P480_A3C default n.
+subdir-ccflags-y += -DCONFIG_QTI_PP=1
 obj-$(CONFIG_P480_A3C) += msm-pcm-q6-v2.o msm-compress-q6-v2.o
 obj-$(CONFIG_P480_A3C) += msm-pcm-hostless.o msm-pcm-afe-v2.o msm-pcm-q6-noirq.o
 obj-$(CONFIG_P480_A3C) += msm-pcm-routing-v2.o msm-pcm-routing-devdep.o
@@ -1012,6 +1016,22 @@ def check(root):
             raise RuntimeError("P480 pinned ION donor header missing " + rel)
     pcm=(dest / "msm-pcm-q6-v2.c").read_text()
     compr=(dest / "msm-compress-q6-v2.c").read_text()
+    # No local stubs may shadow the built-in QTI PP provider definitions.
+    makefile = (dest / "Makefile").read_text()
+    pp_h = (dest / "msm-qti-pp-config.h").read_text()
+    pp_c = (dest / "msm-qti-pp-config.c").read_text()
+    if ("subdir-ccflags-y += -DCONFIG_QTI_PP=1" not in makefile or
+            "msm-qti-pp-config.o" not in makefile or
+            "#ifdef CONFIG_QTI_PP" not in pp_h):
+        raise RuntimeError("P480 genuine QTI PP built-in feature guard missing")
+    for fn in ("msm_adsp_init_mixer_ctl_pp_event_queue",
+               "msm_adsp_clean_mixer_ctl_pp_event_queue",
+               "msm_adsp_inform_mixer_ctl",
+               "msm_adsp_stream_cmd_info",
+               "msm_adsp_stream_callback_get",
+               "msm_adsp_stream_callback_info"):
+        if "int " + fn + "(" not in pp_c:
+            raise RuntimeError("P480 genuine QTI PP function absent " + fn)
     if ".pcm_construct = p480_pcm_construct" not in pcm:
         raise RuntimeError("P480 real PCM component callback bridge missing")
     for filename, needle in (
