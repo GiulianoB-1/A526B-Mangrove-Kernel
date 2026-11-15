@@ -866,7 +866,9 @@ def stage(root, tg, d54, report):
     # Import only real pinned codec API headers needed by Kona.
     # In particular WCD938x is the selected A52 physical codec.
     # Do not import unported WSA/WCD937x implementations.
-    for rel in ("codecs/wsa881x.h", "codecs/wsa883x/wsa883x.h",
+    for rel in ("codecs/wsa881x.h", "codecs/wsa881x-registers.h",
+                "codecs/wsa883x/wsa883x.h",
+                "codecs/wsa883x/wsa883x-registers.h",
                 "codecs/wcd937x/wcd937x.h",
                 "codecs/wcd937x/wcd937x-mbhc.h",
                 "codecs/wcd938x/wcd938x.h",
@@ -1025,6 +1027,15 @@ def check(root):
         header = dest / rel
         if not header.is_file() or required not in header.read_text():
             raise RuntimeError("P480 genuine WCD938x Kona header missing " + rel)
+    # Kona uses unported WSA types but never enables WSA hardware.
+    # Copy the donor's transitive register headers, not its codec drivers.
+    for rel, required in (
+        ("codecs/wsa881x-registers.h", "WSA881X_REGISTERS_H"),
+        ("codecs/wsa883x/wsa883x-registers.h", "WSA883X_REGISTERS_H"),
+    ):
+        header = dest / rel
+        if not header.is_file() or required not in header.read_text():
+            raise RuntimeError("P480 pinned WSA declaration dependency missing " + rel)
     pcm=(dest / "msm-pcm-q6-v2.c").read_text()
     compr=(dest / "msm-compress-q6-v2.c").read_text()
     # No local stubs may shadow the built-in QTI PP provider definitions.
