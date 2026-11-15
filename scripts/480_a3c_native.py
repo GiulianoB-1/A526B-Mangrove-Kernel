@@ -469,6 +469,46 @@ def adapt_510_compress(source):
 
 
 
+def adapt_510_dai_mute(source):
+    """Bridge the real legacy digital mute callbacks to 5.10.
+
+    In the pinned 5.4 ASoC core, .digital_mute is called for playback
+    only. ACK 5.10 expects .mute_stream(dai, mute, stream).
+    """
+    pairs = (
+        ("msm_dai_q6_spk_digital_mute", "p480_spk_mute_stream",
+         "static struct snd_soc_dai_ops msm_dai_slimbus_0_rx_ops = {"),
+        ("msm_dai_q6_cdc_dma_digital_mute", "p480_cdc_dma_mute_stream",
+         "static struct snd_soc_dai_ops msm_dai_q6_cdc_wsa_dma_ops = {"),
+    )
+    if source.count(".digital_mute =") != len(pairs):
+        raise RuntimeError("P480 pinned digital mute tables drift")
+    for old, new, anchor in pairs:
+        prototype = re.compile(
+            r"static int\s+" + old +
+            r"\s*\(\s*struct snd_soc_dai\s*\*dai,\s*int mute\s*\)")
+        if len(prototype.findall(source)) != 1:
+            raise RuntimeError("P480 pinned digital mute signature drift " + old)
+        assignment = ".digital_mute = " + old + ","
+        if source.count(assignment) != 1 or source.count(anchor) != 1:
+            raise RuntimeError("P480 pinned digital mute ops drift " + old)
+        wrapper = (
+            "/* Keep the original 5.4 playback-only mute behavior. */\n"
+            "static int %s(struct snd_soc_dai *dai, int mute, int stream)\n"
+            "{\n"
+            "\tif (stream != SNDRV_PCM_STREAM_PLAYBACK)\n"
+            "\t\treturn -ENOTSUPP;\n"
+            "\treturn %s(dai, mute);\n"
+            "}\n\n" % (new, old))
+        source = source.replace(anchor, wrapper + anchor, 1)
+        source = source.replace(
+            assignment,
+            ".mute_stream = " + new + ",\n\t.no_capture_mute = 1,", 1)
+    if ".digital_mute =" in source:
+        raise RuntimeError("P480 removed digital mute member survived")
+    return source
+
+
 def adapt_510_dai_aif(source, driver_name):
     """Retain vendor AIF DAPM route names without changing GKI ASoC structs.
 
@@ -845,6 +885,8 @@ def stage(root, tg, d54, report):
             src = adapt_510_compress(src)
         if name in ("msm-dai-fe.c", "msm-dai-q6-v2.c"):
             src = adapt_510_dai_aif(src, name)
+        if name == "msm-dai-q6-v2.c":
+            src = adapt_510_dai_mute(src)
         if name == "msm-pcm-routing-v2.c":
             src = adapt_510_routing(src)
         if name == "platform_init.c":
@@ -992,6 +1034,13 @@ def check(root):
                 "p480_aif_name(" not in dai or
                 re.search(r'\.aif_name\b', dai)):
             raise RuntimeError("P480 native AIF routes missing " + driver_name)
+    dai_q6 = (dest / "msm-dai-q6-v2.c").read_text()
+    if (".digital_mute =" in dai_q6 or
+            dai_q6.count(".no_capture_mute = 1,") != 2):
+        raise RuntimeError("P480 DAI playback-only mute ABI bridge missing")
+    for cb in ("p480_spk_mute_stream", "p480_cdc_dma_mute_stream"):
+        if dai_q6.count(".mute_stream = " + cb + ",") != 1:
+            raise RuntimeError("P480 5.10 mute_stream missing " + cb)
     routing = (dest / "msm-pcm-routing-v2.c").read_text()
     for method in (".hw_params = p480_routing_hw_params",
                    ".close = p480_routing_close",
