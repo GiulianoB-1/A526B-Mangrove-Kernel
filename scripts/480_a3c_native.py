@@ -468,6 +468,145 @@ def adapt_510_compress(source):
     return source
 
 
+
+def adapt_510_dai_aif(source, driver_name):
+    """Retain vendor AIF DAPM route names without changing GKI ASoC structs.
+
+    5.4 carries both stream_name and aif_name in snd_soc_pcm_stream,
+    while 5.10 exposes only stream_name. Keep the original stream widget
+    names and transfer vendor AIF endpoints to a private lookup table.
+    """
+    if driver_name not in ("msm-dai-q6-v2.c", "msm-dai-fe.c"):
+        raise RuntimeError("P480 unexpected AIF adapter driver")
+    expected = {"msm-dai-q6-v2.c": (264, 4),
+                "msm-dai-fe.c": (185, 2)}
+    number, per_direction = expected[driver_name]
+    pair_re = re.compile(
+        r'(?m)^([ \t]*)\.stream_name\s*=\s*"([^"]+)",\s*\n'
+        r'[ \t]*\.aif_name\s*=\s*"([^"]+)",')
+    pairs = list(pair_re.finditer(source))
+    if len(pairs) != number or len(re.findall(
+            r'(?m)^[ \t]*\.aif_name\s*=', source)) != number:
+        raise RuntimeError("P480 pinned AIF mapping declarations drift " +
+                           driver_name)
+    names = {}
+    for match in pairs:
+        stream_name, aif_name = match.group(2, 3)
+        if stream_name in names and names[stream_name] != aif_name:
+            raise RuntimeError("P480 ambiguous AIF stream " + stream_name)
+        names[stream_name] = aif_name
+    source = pair_re.sub(
+        lambda m: m.group(1) + '.stream_name = "' + m.group(2) + '",',
+        source)
+    for direction in ("playback", "capture"):
+        old = "dai->driver->%s.aif_name" % direction
+        if source.count(old) != per_direction:
+            raise RuntimeError("P480 AIF route callback drift " + driver_name +
+                               " " + direction)
+        source = source.replace(
+            old, "p480_aif_name(&dai->driver->%s)" % direction)
+    if re.search(r'\.aif_name\b', source):
+        raise RuntimeError("P480 obsolete snd_soc_pcm_stream.aif_name remains")
+    anchor = ("static int fe_dai_probe(struct snd_soc_dai *dai)" if
+              driver_name == "msm-dai-fe.c" else
+              "static int msm_dai_q6_dai_add_route(struct snd_soc_dai *dai)")
+    if source.count(anchor) != 1 or source.count(
+            "#include <linux/init.h>") != 1:
+        raise RuntimeError("P480 AIF route insertion anchor drift")
+    table = (
+        "\n/* P480: lossless AIF widget routes from the pinned 5.4 donor. */\n"
+        "struct p480_aif_link {\n"
+        "\tconst char *stream;\n"
+        "\tconst char *aif;\n"
+        "};\n"
+        "static const struct p480_aif_link p480_aif_links[] = {\n")
+    for stream_name, aif_name in names.items():
+        table += "\t{%s, %s},\n" % (
+            json.dumps(stream_name), json.dumps(aif_name))
+    table += (
+        "};\n"
+        "static const char *p480_aif_name(const struct snd_soc_pcm_stream *s)\n"
+        "{\n"
+        "\tunsigned int i;\n"
+        "\tif (!s || !s->stream_name)\n"
+        "\t\treturn NULL;\n"
+        "\tfor (i = 0; i < ARRAY_SIZE(p480_aif_links); i++)\n"
+        "\t\tif (!strcmp(s->stream_name, p480_aif_links[i].stream))\n"
+        "\t\t\treturn p480_aif_links[i].aif;\n"
+        "\treturn NULL;\n"
+        "}\n\n")
+    source = source.replace(anchor, table + anchor, 1)
+    source = source.replace(
+        "#include <linux/init.h>",
+        "#include <linux/kernel.h>\n#include <linux/string.h>\n"
+        "#include <linux/init.h>", 1)
+    return source
+
+
+def adapt_510_routing(source):
+    """Port all real routing callbacks and PCM lifecycle to 5.10."""
+    old_check = "if (cal_data == NULL)"
+    if source.count(old_check) != 1 or (
+            "static struct cal_type_data *cal_data[MAX_ROUTING_CAL_TYPES];"
+            not in source):
+        raise RuntimeError("P480 routing calibration pointer guard drift")
+    # cal_data is an array, never a nullable pointer. Check the actual
+    # calibration entries before the DSP topology lookups instead.
+    source = source.replace(
+        old_check, "if (!cal_data[ADM_LSM_TOPOLOGY_CAL_TYPE_IDX] ||\n"
+        "\t    !cal_data[ADM_TOPOLOGY_CAL_TYPE_IDX])", 1)
+    ops = re.compile(
+        r'static const struct snd_pcm_ops msm_routing_pcm_ops = \{'
+        r'[\s\S]*?\n\};')
+    matches = list(ops.finditer(source))
+    if len(matches) != 1 or any(
+            name not in matches[0].group(0)
+            for name in ("msm_pcm_routing_hw_params",
+                         "msm_pcm_routing_close",
+                         "msm_pcm_routing_prepare")):
+        raise RuntimeError("P480 routing PCM callback table drift")
+    source = source[:matches[0].start()] + (
+        "/* PCM callbacks are bridged to component methods below. */"
+    ) + source[matches[0].end():]
+    anchor = "static struct snd_soc_component_driver msm_soc_routing_component = {"
+    if source.count(anchor) != 1 or any(
+            source.count(x) != 1 for x in (
+                "\t.ops\t\t= &msm_routing_pcm_ops,",
+                "\t.pcm_new\t= msm_routing_pcm_new,",
+                "\t.pcm_free\t= msm_routing_pcm_free,")):
+        raise RuntimeError("P480 routing component driver ABI drift")
+    wrappers = (
+        "/* P480: call the real 5.4 routing engine via 5.10 component ABI. */\n"
+        "static int p480_routing_hw_params(struct snd_soc_component *c,\n"
+        "\tstruct snd_pcm_substream *s, struct snd_pcm_hw_params *p)\n"
+        "{\n\treturn msm_pcm_routing_hw_params(s, p);\n}\n"
+        "static int p480_routing_close(struct snd_soc_component *c,\n"
+        "\tstruct snd_pcm_substream *s)\n"
+        "{\n\treturn msm_pcm_routing_close(s);\n}\n"
+        "static int p480_routing_prepare(struct snd_soc_component *c,\n"
+        "\tstruct snd_pcm_substream *s)\n"
+        "{\n\treturn msm_pcm_routing_prepare(s);\n}\n"
+        "static int p480_routing_construct(struct snd_soc_component *c,\n"
+        "\tstruct snd_soc_pcm_runtime *rtd)\n"
+        "{\n\treturn msm_routing_pcm_new(rtd);\n}\n"
+        "static void p480_routing_destruct(struct snd_soc_component *c,\n"
+        "\tstruct snd_pcm *pcm)\n"
+        "{\n\tmsm_routing_pcm_free(pcm);\n}\n\n"
+    )
+    source = source.replace(anchor, wrappers + anchor, 1)
+    source = source.replace(
+        "\t.ops\t\t= &msm_routing_pcm_ops,",
+        "\t.hw_params = p480_routing_hw_params,\n"
+        "\t.close = p480_routing_close,\n"
+        "\t.prepare = p480_routing_prepare,", 1)
+    source = source.replace(
+        "\t.pcm_new\t= msm_routing_pcm_new,",
+        "\t.pcm_construct = p480_routing_construct,", 1)
+    source = source.replace(
+        "\t.pcm_free\t= msm_routing_pcm_free,",
+        "\t.pcm_destruct = p480_routing_destruct,", 1)
+    return source
+
 def adapt_header(content):
     """Drop only false WCD937x and missing SWR-DMIC alternatives.
     Preserve actual WCD938x/RX/TX/VA codec entries. No dummy replacements.
@@ -704,6 +843,10 @@ def stage(root, tg, d54, report):
             src = adapt_510_hostless(src)
         if name == "msm-compress-q6-v2.c":
             src = adapt_510_compress(src)
+        if name in ("msm-dai-fe.c", "msm-dai-q6-v2.c"):
+            src = adapt_510_dai_aif(src, name)
+        if name == "msm-pcm-routing-v2.c":
+            src = adapt_510_routing(src)
         if name == "platform_init.c":
             # The 5.4 all-platform initializer calls unported voice,
             # CVD, HDMI and LSM functions. Never import that behavior.
@@ -838,6 +981,24 @@ def check(root):
         raise RuntimeError("P480 5.10 Kona CPU/codec DAI accessor bridge missing")
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
+    for driver_name, expected in (("msm-dai-fe.c", 185),
+                                  ("msm-dai-q6-v2.c", 264)):
+        dai = (dest / driver_name).read_text()
+        if (dai.count('{"') != expected or
+                "p480_aif_name(" not in dai or
+                re.search(r'\.aif_name\b', dai)):
+            raise RuntimeError("P480 native AIF routes missing " + driver_name)
+    routing = (dest / "msm-pcm-routing-v2.c").read_text()
+    for method in (".hw_params = p480_routing_hw_params",
+                   ".close = p480_routing_close",
+                   ".prepare = p480_routing_prepare",
+                   ".pcm_construct = p480_routing_construct",
+                   ".pcm_destruct = p480_routing_destruct"):
+        if method not in routing:
+            raise RuntimeError("P480 routing component callback bridge missing " + method)
+    if ("if (cal_data == NULL)" in routing or
+            "if (!cal_data[ADM_LSM_TOPOLOGY_CAL_TYPE_IDX]" not in routing):
+        raise RuntimeError("P480 routing real calibration guard missing")
     if "SND_AUDIOCODEC_AC3" not in (dest / "p480-compress-abi.h").read_text():
         raise RuntimeError("P480 pinned compress ABI absent")
     hostless = (dest / "msm-pcm-hostless.c").read_text()
