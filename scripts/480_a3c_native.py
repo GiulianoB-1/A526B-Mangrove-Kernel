@@ -365,15 +365,29 @@ def compress_compat_header(d54):
         if len(m) != 1:
             raise RuntimeError("P480 pinned compression extension absent " + name)
         text += "#ifndef %s\n#define %s %s\n#endif\n" % (name, name, m[0])
+    # These enum values extend 5.10 compressed-audio metadata. Keep the
+    # definitions private so the global GKI UAPI remains unchanged.
     for key, value in (
+        ("SNDRV_COMPRESS_PATH_DELAY", 3),
         ("SNDRV_COMPRESS_RENDER_MODE", 4),
         ("SNDRV_COMPRESS_CLK_REC_MODE", 5),
         ("SNDRV_COMPRESS_RENDER_WINDOW", 6),
+        ("SNDRV_COMPRESS_START_DELAY", 7),
+        ("SNDRV_COMPRESS_ENABLE_ADJUST_SESSION_CLOCK", 8),
+        ("SNDRV_COMPRESS_ADJUST_SESSION_CLOCK", 9),
     ):
         if not re.search(r"\b" + key + r"\s*=\s*" + str(value) + r"\s*,",
                          offload):
             raise RuntimeError("P480 pinned compress metadata key drift " + key)
         text += "#ifndef %s\n#define %s %d\n#endif\n" % (key, key, value)
+
+    # DSP_POSITION is a separate donor macro, not an enum member.
+    if not re.search(r"(?m)^#define\s+SNDRV_COMPRESS_DSP_POSITION\s+10\s*$",
+                     offload):
+        raise RuntimeError("P480 pinned DSP position metadata key drift")
+    text += ("#ifndef SNDRV_COMPRESS_DSP_POSITION\n"
+             "#define SNDRV_COMPRESS_DSP_POSITION 10\n"
+             "#endif\n")
     m = re.search(r"struct snd_codec_metadata \{[\s\S]*?\n\};", params)
     if not m or m.group(0).count("__u32") != 3 or "__u64 timestamp;" not in m.group(0):
         raise RuntimeError("P480 pinned codec buffer metadata ABI drift")
