@@ -867,6 +867,34 @@ def adapt_machine(source):
     if len(nohost_re.findall(source)) != 21:
         raise RuntimeError("P480 Kona no-host core ABI drift")
     source = nohost_re.sub(r'\1.ignore = 1,', source)
+    # ACK 5.10 lacks the reversible CONFIG_AUDIO_QGKI card state API.
+    # On ADSP SSR, disconnect ALSA userspace and require a reboot.
+    old_ssr = "snd_soc_card_change_online_state(card, "
+    if source.count(old_ssr) != 2:
+        raise RuntimeError("P480 pinned 5.4 Kona card SSR API drift")
+    source = source.replace(old_ssr, "p480_card_change_online_state(card, ")
+    ssr_anchor = "static int kona_ssr_enable(struct device *dev, void *data)"
+    if source.count(ssr_anchor) != 1:
+        raise RuntimeError("P480 pinned Kona SSR callback anchor drift")
+    ssr_fallback = r'''
+/* P480: 5.10 cannot revive a disconnected ALSA card after ADSP SSR. */
+static void p480_card_change_online_state(struct snd_soc_card *card, int online)
+{
+    int rc;
+    if (!card || !card->snd_card)
+        return;
+    if (online) {
+        if (READ_ONCE(card->snd_card->shutdown))
+            dev_warn(card->dev, "P480 A3c SSR cannot reconnect: reboot required\n");
+        return;
+    }
+    dev_warn(card->dev, "P480 A3c SSR: disconnect ALSA until reboot\n");
+    rc = snd_card_disconnect(card->snd_card);
+    if (rc)
+        dev_err(card->dev, "P480 A3c SSR disconnect rc=%d\n", rc);
+}
+'''
+    source = source.replace(ssr_anchor, ssr_fallback + ssr_anchor, 1)
     # Exclude the physical WSA speaker AUX devices but keep the real
     # WCD938x AUX device needed by the headset microphone path.
     source = one(source,
@@ -1054,6 +1082,8 @@ config P480_A3C
     inventory["real_provider_probe_wrappers"] = log_names
     inventory["machine_source"] = "Samsung SM7325 5.4 Kona adapted with pinned TG r02 contract"
     inventory["A3c_hardware_verified"] = False
+    inventory["SSR_reonline_supported"] = False
+    inventory["SSR_down_fail_closed_until_reboot"] = True
     inventory["hostless_dpcm_5_4_core_semantics_ported"] = False
     inventory["no_host_links_fail_closed"] = 21
     inventory["async_dpcm_5_4_extension_disabled_for_5_10"] = True
@@ -1158,6 +1188,10 @@ def check(root):
             "cpu_latency_qos_add_request(&substream->latency_pm_qos_req" not in s
             or "PM_QOS_REQ_AFFINE_CORES" in s):
         raise RuntimeError("P480 5.10 explicit CPU latency QoS bridge missing")
+    if ("snd_soc_card_change_online_state(" in s or
+            s.count("p480_card_change_online_state(card, ") != 2 or
+            "snd_card_disconnect(card->snd_card)" not in s):
+        raise RuntimeError("P480 5.10 SSR fail-closed adapter missing")
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
     for driver_name, expected in (("msm-dai-fe.c", 185),
