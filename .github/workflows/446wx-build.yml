@@ -62,7 +62,7 @@ on:
         required: false
         default: ''
 permissions:
-  contents: read
+  contents: write  # isolated recovery branch: publish verified source ONLY after equivalence PASS
   actions: read
 env:
   MANGROVE_RESTORE_MODE: ${{ inputs.restore_mode || 'wx' }}
@@ -2276,6 +2276,12 @@ jobs:
             --reference workspace/p479-reference \
             --report phase447-inventory/P479-WX-EQUIVALENCE-PROOF.json
           echo 'P479 SHA-pinned WX equivalent to run 43638159300: config, map, ELF alloc sections, all native H4/CDC markers PASS. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive complete equivalent P479 source permanently (only after proof PASS)
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/p479_export_verified_full_source.sh
+          bash scripts/p479_export_verified_full_source.sh
       - name: Publish P479 equivalence evidence (NOT a flash authorization)
         if: always() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
