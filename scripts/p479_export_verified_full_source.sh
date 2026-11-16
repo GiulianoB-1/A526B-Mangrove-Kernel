@@ -35,7 +35,9 @@ mkdir -p "$ASSETS"
 # Exclude *all* nested .git metadata: KernelSU/.git is present in the WX source
 # archive and must become regular tracked files in the future one-commit repo.
 # Kernel objects reside in external O= and are not part of this source.
-tar -C "$ROOT" --exclude-vcs --use-compress-program='zstd -5 -T0' \
+# Ignore Git metadata only; --exclude-vcs is forbidden because it also drops
+# .gitignore/.gitattributes, which are part of the complete source tree.
+tar -C "$ROOT" --exclude='.git' --use-compress-program='zstd -5 -T0' \
   -cf "$ASSETS/P479-verified-full-source.tar.zst" .
 cp "$BUILD/.config" "$ASSETS/P479.config"
 cp "$PROOF" "$ASSETS/P479-equivalence-proof.json"
@@ -46,6 +48,10 @@ cp "$MANIFEST" "$ASSETS/P479-final-tree-manifest.json"
 # Check archived source is structurally complete and excludes nested Git data.
 tar --use-compress-program=zstd -tf "$ASSETS/P479-verified-full-source.tar.zst" > "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
 grep -Fxq './Makefile' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
+grep -Fxq './.gitignore' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
+grep -Fxq './.gitattributes' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
+grep -Fxq './KernelSU/.gitignore' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
+grep -Fxq './KernelSU/.gitattributes' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
 grep -Fxq './KernelSU/Makefile' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt" || \
   grep -Fxq './KernelSU/kernel/Makefile' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt" || \
   grep -Fxq './KernelSU/Kbuild' "$RUNNER_TEMP/P479-ARCHIVE-FILELIST.txt"
