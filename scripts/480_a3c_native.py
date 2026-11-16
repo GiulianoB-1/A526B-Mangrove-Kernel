@@ -895,6 +895,38 @@ static void p480_card_change_online_state(struct snd_soc_card *card, int online)
 }
 '''
     source = source.replace(ssr_anchor, ssr_fallback + ssr_anchor, 1)
+    # CONFIG_AUDIO_QGKI-only dynamic_be is absent in the 5.10 link
+    # layout. The pinned 5.4 soc-pcm/soc-core never read the field,
+    # so retain native .no_pcm/.dpcm_* BE behavior without inventing
+    # a replacement flag or converting these links to FEs.
+    dynamic_be = re.compile(r'(?m)^[ \t]*\.dynamic_be\s*=\s*1,\s*\n')
+    if len(dynamic_be.findall(source)) != 5:
+        raise RuntimeError("P480 pinned Kona dynamic_be ABI drift")
+    source = dynamic_be.sub("", source)
+
+    # soc_find_component() exists in ACK 5.10 but is a static ASoC-core
+    # helper, inaccessible to the Kona module. Keep verified OF phandles;
+    # actual component readiness is enforced by soc_bind_aux_dev() in
+    # ACK 5.10 during snd_soc_register_card (returns -EPROBE_DEFER).
+    old_find = "if (soc_find_component(dlc)) {"
+    if source.count(old_find) != 2:
+        raise RuntimeError("P480 pinned Kona private ASoC lookup drift")
+    source = source.replace(old_find,
+        "/* P480: ASoC core validates component at bind time. */\n"
+        "\t\tif (dlc->of_node) {")
+
+    # ACK 5.10 stores snd_soc_codec_conf identity in the DLC too.
+    for old, new, count in (
+        ("msm_codec_conf[i].dev_name", "msm_codec_conf[i].dlc.name", 1),
+        ("msm_codec_conf[i].of_node", "msm_codec_conf[i].dlc.of_node", 1),
+        ("msm_codec_conf[wsa_max_devs + i].dev_name",
+         "msm_codec_conf[wsa_max_devs + i].dlc.name", 1),
+        ("msm_codec_conf[wsa_max_devs + i].of_node",
+         "msm_codec_conf[wsa_max_devs + i].dlc.of_node", 1),
+    ):
+        if source.count(old) != count:
+            raise RuntimeError("P480 pinned Kona codec conf DLC drift " + old)
+        source = source.replace(old, new)
     # Exclude the physical WSA speaker AUX devices but keep the real
     # WCD938x AUX device needed by the headset microphone path.
     source = one(source,
@@ -1083,6 +1115,8 @@ config P480_A3C
     inventory["machine_source"] = "Samsung SM7325 5.4 Kona adapted with pinned TG r02 contract"
     inventory["A3c_hardware_verified"] = False
     inventory["SSR_reonline_supported"] = False
+    inventory["dynamic_be_QGKI_hint_unsupported_in_5_10"] = 5
+    inventory["AUX_component_registration_deferred_to_ASoC_core"] = True
     inventory["SSR_down_fail_closed_until_reboot"] = True
     inventory["hostless_dpcm_5_4_core_semantics_ported"] = False
     inventory["no_host_links_fail_closed"] = 21
@@ -1188,6 +1222,17 @@ def check(root):
             "msm_aux_dev[i].name" in s or
             "msm_aux_dev[i].codec_of_node" in s):
         raise RuntimeError("P480 5.10 auxiliary DLC bridge missing")
+    if (".dynamic_be" in s or "soc_find_component(dlc)" in s or
+            s.count("if (dlc->of_node) {") != 2 or
+            s.count("msm_codec_conf[i].dlc.name") != 1 or
+            s.count("msm_codec_conf[i].dlc.of_node") != 1 or
+            s.count("msm_codec_conf[wsa_max_devs + i].dlc.name") != 1 or
+            s.count("msm_codec_conf[wsa_max_devs + i].dlc.of_node") != 1 or
+            "msm_codec_conf[i].dev_name" in s or
+            "msm_codec_conf[i].of_node" in s or
+            "msm_codec_conf[wsa_max_devs + i].dev_name" in s or
+            "msm_codec_conf[wsa_max_devs + i].of_node" in s):
+        raise RuntimeError("P480 Kona 5.10 BE flags/aux codec API bridge missing")
     if ("#include <linux/pm_qos.h>" not in s or
             "cpu_latency_qos_add_request(&substream->latency_pm_qos_req" not in s
             or "PM_QOS_REQ_AFFINE_CORES" in s):
