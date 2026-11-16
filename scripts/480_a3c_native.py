@@ -1180,8 +1180,12 @@ def check(root):
             ".no_host_mode" in s or ".async_ops" in s or
             "NO_HOST_CORE_ABI_NOT_PORTED" not in s):
         raise RuntimeError("P480 5.10 Kona hostless or sync-DPCM gate missing")
-    if (s.count("msm_aux_dev[i].dlc.name") != 2 or
-            s.count("msm_aux_dev[i].dlc.of_node") != 2 or
+    # The pinned donor already writes each DLC field once in its WSA
+    # setup. The two legacy read sites are converted above, giving three
+    # occurrences of each field in the generated Kona source.
+    if (s.count("msm_aux_dev[i].dlc.name") != 3 or
+            s.count("msm_aux_dev[i].dlc.of_node") != 3 or
+            "msm_aux_dev[i].name" in s or
             "msm_aux_dev[i].codec_of_node" in s):
         raise RuntimeError("P480 5.10 auxiliary DLC bridge missing")
     if ("#include <linux/pm_qos.h>" not in s or
