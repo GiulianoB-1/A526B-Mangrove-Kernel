@@ -1,0 +1,60 @@
+name: Verify inherited WX boot header and STM DTB without recompilation (NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-wx-boot-package-smoke
+permissions:
+  contents: read
+jobs:
+  boot-input-smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download SHA-pinned permanent WX source and boot archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+          mkdir -p archives unpack bootreports
+          gh release download phase446wx-source-backup --repo "$GITHUB_REPOSITORY" \
+            --pattern phase446wx-artifact-12271681215.zip \
+            --pattern phase446wx-boot-template-12272271056.zip --dir archives
+          printf '%s  %s\n' 4a67e19ed23935ea6596a76cfc5f28d434cd37b7061ab7bc520a7a0ce8137a6b archives/phase446wx-artifact-12271681215.zip | sha256sum -c -
+          printf '%s  %s\n' 9586df44718ae3a84178ea43e4632db3c988c1652564c4586ed217e84c918efe archives/phase446wx-boot-template-12272271056.zip | sha256sum -c -
+          unzip -p archives/phase446wx-artifact-12271681215.zip boot-final.dtb > unpack/boot-final.dtb
+          unzip -p archives/phase446wx-boot-template-12272271056.zip boot-f0bisect-gki-p6-v1.img > unpack/boot.img
+          printf '%s  %s\n' ef0f35ad261a072f301c6f52521c4ff33c59595dd09f4c42df55e7642bbc7b09 unpack/boot.img | sha256sum -c -
+      - name: Require five exact existing boot parameter tokens, no mutation or duplicates
+        run: |
+          set -Eeuo pipefail
+          for token in a52.usb_handover=1 a52.446w_cold=0 \
+                       a52.446w_handoff=0 a52.446w_tty=3 a52.touch=1; do
+            name="${token%%=*}"
+            python3 scripts/446wx_verify_inherited_boot_token.py \
+              --boot unpack/boot.img --token "$token" --report "bootreports/${name}.json"
+          done
+          sha256sum unpack/boot.img
+          if grep -Eq '^python3 scripts/446_append_boot_cmdline.py' scripts/446z_package_preserved_wx.sh; then
+            echo "::error::WX packaging still attempts boot flag append"; exit 1
+          fi
+          if ! grep -Eq '^python3 scripts/446_append_boot_cmdline.py' scripts/446z_package_preserved.sh; then
+            echo "::error::Original 446S packager has been altered"; exit 1
+          fi
+      - name: Verify inherited actual boot DTB and STM touch without patching
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/446x_check_final_touch_dtb.py --boot unpack/boot.img \
+            --report bootreports/Phase446X-Touch-Original.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,runpy
+          parser=runpy.run_path('scripts/38_repack_a52_p1_boot.py')['parse_boot']
+          b=parser(Path('unpack/boot.img').read_bytes())
+          pinned=Path('unpack/boot-final.dtb').read_bytes()
+          assert pinned==b['dtb'], 'WX source and boot template DTBs differ'
+          print('INHERITED WX DTB BYTE MATCH:', hashlib.sha256(pinned).hexdigest())
+          PY
+          echo 'Original WX boot already contains flags and TG R02 STM DTB. WX-only packager must not append or reapply. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
