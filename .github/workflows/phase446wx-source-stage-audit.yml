@@ -1,0 +1,140 @@
+name: Phase446WX source stage-marker audit (NO BUILD, NO FLASH)
+on:
+  push:
+    branches:
+      - agent/phase446wx-stage-marker-audit
+
+permissions:
+  contents: read
+
+jobs:
+  source-audit:
+    name: Verify frozen WX tree and preexisting delta stages
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Acquire source from permanent release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+          mkdir -p wx wx-source
+          gh release download phase446wx-source-backup --repo "${GITHUB_REPOSITORY}" \
+            --pattern phase446wx-artifact-12271681215.zip --dir wx
+          printf '%s  %s\n' 4a67e19ed23935ea6596a76cfc5f28d434cd37b7061ab7bc520a7a0ce8137a6b \
+            wx/phase446wx-artifact-12271681215.zip | sha256sum -c -
+          unzip -q wx/phase446wx-artifact-12271681215.zip -d wx/inputs
+          printf '%s  %s\n' d57c5c82bc938a6d582f0d676eddc3fdb9c6d0689bf2de6c7b5cd9e8538e13a8 \
+            wx/inputs/final-patched-gki-source.tar.zst | sha256sum -c -
+          printf '%s  %s\n' 26f64921f357bd66469f04fc7fcaea4e60a47f8ce49980e3923f4c91cf28a737 \
+            wx/inputs/final.config | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,hashlib
+          d=Path('wx/inputs')
+          manifest=json.loads((d/'final-tree-manifest.json').read_text())
+          assert manifest['strict'] is True and not manifest['missing_required']
+          assert manifest['source_fingerprint_sha256']=='fb330e2da844e7b8b8b3043f7de3fdad5c6c2f9c3caae7c58ce6ad10a47eca8e'
+          assert manifest['kernel_config_sha256']=='26f64921f357bd66469f04fc7fcaea4e60a47f8ce49980e3923f4c91cf28a737'
+          assert manifest['workflow_id']==39431575680
+          assert manifest['workflow_commit_sha']=='9314c6da8c4bc47b56e3539e5f5afc1d42bd4c9e'
+          assert manifest['gki_common_pinned_sha']=='f960ed27302b1ff8e61e152fc202554d778deccd'
+          inputs=json.loads((d/'FINAL-BUILD-INPUTS.json').read_text())
+          assert inputs['pinned_gki_git_head']==manifest['gki_common_pinned_sha']
+          for name,info in inputs['files'].items():
+              path=d/name
+              assert path.is_file(), name
+              assert path.stat().st_size==info['bytes'], name
+              assert hashlib.sha256(path.read_bytes()).hexdigest()==info['sha256'], name
+          print('WX source zip/tar/config/fingerprint/manifest provenance PASS')
+          PY
+          tar --use-compress-program=zstd -xf wx/inputs/final-patched-gki-source.tar.zst -C wx-source
+          test -s wx-source/Makefile
+      - name: Materialize exact pinned legacy check-only scripts
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,zlib,hashlib
+          specs={
+            'scripts/446t_apply_smmu_hold_no_nested.py.z64':('scripts/446t_apply_smmu_hold_no_nested.py','c589faa4a829d56a394a839349b8d23f250c467522aa3781927504c2873edc37'),
+            'scripts/446y_apply_handoff_i2c.py.z64':('scripts/446y_apply_handoff_i2c.py','0cd9a1eea938e8f3aa74e48d9b11b89cdfacfce3defb476e069d292774beb81d')
+          }
+          for src,(dst,expect) in specs.items():
+            raw=zlib.decompress(base64.b64decode(Path(src).read_text().strip(),validate=True))
+            assert hashlib.sha256(raw).hexdigest()==expect,src
+            if '446y_' in src:
+                old=b'    if (!gi2c->se.wrapper)\n        return -EPROBE_DEFER;'
+                new=b'    if (!gi2c->se.wrapper) {\n        return -EPROBE_DEFER;\n    }'
+                assert raw.count(old)==1
+                raw=raw.replace(old,new,1)
+                assert hashlib.sha256(raw).hexdigest()=='d9b95c7f7ee9ccc14e590d82a5d6b91f737c504babc63132d0488fc0447016b7'
+            Path(dst).write_bytes(raw)
+          PY
+      - name: Audit each preexisting stage via its own check-only implementation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess,sys
+          root=str(Path('wx-source').resolve())
+          stages='''446t_apply_smmu_hold_no_nested
+          446t_early_frame_trace
+          446u_apply_atomic_request_trace
+          446u_expand_p445_store
+          446u_apply_usb_console_handover
+          446v_apply_hwc_read_trace
+          446v_apply_state_diff
+          446v_apply_pmk8350_rtc
+          446w_apply_splash_select
+          446w_apply_handoff_option_b
+          446w_apply_ttygs3
+          446w_b_apply_first_hwc_modeset
+          446w_b_apply_dsi_path_trace
+          446x_apply_stm_touch
+          446y_apply_handoff_i2c
+          446y_fix_geni_clock_unwind
+          446z_apply_qup_core_touch
+          446aa_trace_touch_drm
+          446ab_probe_fifo_and_property_epochs
+          446ac_stage_gpi
+          446ac_gsi_i2c
+          446ac_hwc_ring
+          447_flicker_ring
+          446ad_fix_ipc_logging_compat
+          446ad_gsi_crash_guard
+          446ae_dma_wrapper_guard
+          446af_gpi_callback_abi
+          447b_restore_446ag_touch
+          447_stage_control
+          447c_quiet_frame_trace'''.split()
+          failures=[]
+          report=[]
+          for stage in stages:
+              path=Path('scripts')/(stage+'.py')
+              if not path.is_file():
+                  failures.append(stage+' (missing stage audit)')
+                  report.append((stage,'MISSING'))
+                  continue
+              p=subprocess.run([sys.executable,str(path),'--root',root,'--check-only'],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+              print(f'=== {stage} rc={p.returncode} ===\n'+p.stdout[-3500:],flush=True)
+              report.append((stage,'PASS' if p.returncode==0 else 'FAIL'))
+              if p.returncode: failures.append(stage)
+          Path('wx-stage-audit.tsv').write_text('stage\tresult\n'+''.join(f'{s}\t{status}\n' for s,status in report))
+          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write('### Phase446WX stage check-only evidence (no source mutation)\n\n')
+              f.write('|Stage|Result|\n|---|---|\n')
+              for s,v in report:f.write(f'|{s}|{v}|\n')
+          assert not failures, 'WX stage checks not all proven: '+', '.join(failures)
+          PY
+      - name: Publish audit status (not a boot build)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WX-P479-STAGE-MARKER-AUDIT-${{ github.run_id }}
+          path: wx-stage-audit.tsv
+          retention-days: 30
