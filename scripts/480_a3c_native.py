@@ -1121,6 +1121,11 @@ subdir-ccflags-y += -DCONFIG_SND_SOC_QDSP6V2=1
 # expose the matching real functions, not the CONFIG_QTI_PP=n inline stubs.
 # Scope this feature selection to A3c only and keep P480_A3C default n.
 subdir-ccflags-y += -DCONFIG_QTI_PP=1
+# A3b builds the genuine CDC pinctrl provider. Its pinned donor header
+# otherwise emits global fallback definitions when CONFIG_MSM_CDC_PINCTRL
+# is absent, colliding with that same provider at vmlinux.o link time.
+# Select the real external prototypes for this A3c directory only.
+subdir-ccflags-y += -DCONFIG_MSM_CDC_PINCTRL=1
 obj-$(CONFIG_P480_A3C) += msm-pcm-q6-v2.o msm-compress-q6-v2.o
 obj-$(CONFIG_P480_A3C) += msm-pcm-hostless.o msm-pcm-afe-v2.o msm-pcm-q6-noirq.o
 obj-$(CONFIG_P480_A3C) += msm-pcm-routing-v2.o msm-pcm-routing-devdep.o
@@ -1238,6 +1243,13 @@ def check(root):
             "msm-qti-pp-config.o" not in makefile or
             "#ifdef CONFIG_QTI_PP" not in pp_h):
         raise RuntimeError("P480 genuine QTI PP built-in feature guard missing")
+    # A3b builds msm-cdc-pinctrl.o. Keep its real API declarations
+    # rather than permitting A3c Kona to emit duplicate global stubs.
+    pinctrl_h = (root / ROOT / "a3b/include/asoc/msm-cdc-pinctrl.h").read_text()
+    if ("subdir-ccflags-y += -DCONFIG_MSM_CDC_PINCTRL=1" not in makefile or
+            "#if IS_ENABLED(CONFIG_MSM_CDC_PINCTRL)" not in pinctrl_h or
+            "extern int msm_cdc_pinctrl_select_sleep_state(" not in pinctrl_h):
+        raise RuntimeError("P480 A3b real CDC pinctrl declaration guard missing")
     for fn in ("msm_adsp_init_mixer_ctl_pp_event_queue",
                "msm_adsp_clean_mixer_ctl_pp_event_queue",
                "msm_adsp_inform_mixer_ctl",
