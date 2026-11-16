@@ -927,6 +927,15 @@ static void p480_card_change_online_state(struct snd_soc_card *card, int online)
         if source.count(old) != count:
             raise RuntimeError("P480 pinned Kona codec conf DLC drift " + old)
         source = source.replace(old, new)
+    # P480 skips WSA speaker AUX enumeration unconditionally.
+    # Its legacy count and pointer used to be initialized only inside
+    # the skipped branch; zero/NULL keeps later AUX array sizing safe.
+    source = one(source, "u32 wsa_max_devs;",
+                 "u32 wsa_max_devs = 0;", "WSA count initialized")
+    source = one(source,
+                 "struct msm_wsa881x_dev_info *wsa881x_dev_info;",
+                 "struct msm_wsa881x_dev_info *wsa881x_dev_info = NULL;",
+                 "WSA information pointer initialized")
     # Exclude the physical WSA speaker AUX devices but keep the real
     # WCD938x AUX device needed by the headset microphone path.
     source = one(source,
@@ -1233,6 +1242,11 @@ def check(root):
             "msm_codec_conf[wsa_max_devs + i].dev_name" in s or
             "msm_codec_conf[wsa_max_devs + i].of_node" in s):
         raise RuntimeError("P480 Kona 5.10 BE flags/aux codec API bridge missing")
+    if ("u32 wsa_max_devs = 0;" not in s or
+            "struct msm_wsa881x_dev_info *wsa881x_dev_info = NULL;" not in s or
+            "P480: speaker AUX is not ported." not in s or
+            "goto codec_aux_dev;" not in s):
+        raise RuntimeError("P480 5.10 Kona WSA AUX skip initialization missing")
     if ("#include <linux/pm_qos.h>" not in s or
             "cpu_latency_qos_add_request(&substream->latency_pm_qos_req" not in s
             or "PM_QOS_REQ_AFFINE_CORES" in s):
