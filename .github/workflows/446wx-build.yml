@@ -48,6 +48,7 @@ on:
       - agent/p479-h4-shadow3-cdc-wake-no-arm
       - agent/p479-wx-equivalence-no-flash
       - agent/p479-wx-equivalence-v2-no-flash
+      - agent/p479-wx-ikheaders-proof
   workflow_dispatch:
     inputs:
       restore_mode:
@@ -2262,6 +2263,212 @@ jobs:
           PY
           echo 'P470-A3 built-in native Image link PASS, but PAS15/DTB/SSR/modem-ready NOT READY; NO FLASH' | tee -a "$LOG"
           echo 'P470-A3 native built-in Image link PASS. This is not a boot artifact and is not flashable.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify P479 IKHEADERS semantic parity and rebuild with original pinned archive (NO FLASH)
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          ROOT="$PWD/gki/common"
+          BUILD="$PWD/workspace/gki-phase199-out"
+          REFERENCE="$PWD/workspace/p479-reference"
+          mkdir -p "$REFERENCE" phase447-inventory
+          gh release download p479-equivalence-reference --repo "$GITHUB_REPOSITORY" \
+            --pattern p479-reference-14131467025.zip --dir workspace
+          printf '%s  %s\n' 44412b170b639ebbbf6615e4a302ec8e4a83e09a934e32da49bbc1c801755230 \
+            workspace/p479-reference-14131467025.zip | sha256sum -c -
+          unzip -p workspace/p479-reference-14131467025.zip \
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux \
+            > "$REFERENCE/P479-reference.vmlinux"
+          unzip -p workspace/p479-reference-14131467025.zip \
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map \
+            > "$REFERENCE/P479-reference.System.map"
+          unzip -p workspace/p479-reference-14131467025.zip \
+            phase447-inventory/P471-D1-COMPILED.config \
+            > "$REFERENCE/P479-reference.config"
+          python3 -m py_compile scripts/p479_ikheaders_pin.py
+          python3 scripts/p479_ikheaders_pin.py \
+            --root "$ROOT" --build "$BUILD" \
+            --reference-vmlinux "$REFERENCE/P479-reference.vmlinux" \
+            --reference-map "$REFERENCE/P479-reference.System.map" \
+            --reference-config "$REFERENCE/P479-reference.config" \
+            --report phase447-inventory/P479-IKHEADERS-PROVENANCE.json
+          # The final native Image was compiled above with runner-generated
+          # headers. Rebuild only AFTER full content parity. Do not fake a map.
+          rm -f "$BUILD/kernel/kheaders.o"
+          MANGROVE_P479_PIN_IKHEADERS=1 make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image
+          printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 \
+            "$BUILD/kernel/kheaders_data.tar.xz" | sha256sum -c -
+          test -s "$BUILD/System.map" && test -s "$BUILD/vmlinux"
+          grep -aFq 'P479 H4 CABLE type=' "$BUILD/arch/arm64/boot/Image"
+          grep -Eq '[[:space:]][tT][[:space:]]p479_h4_tick([.][^[:space:]]+)?
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p workspace/p479-reference phase447-inventory
+          # The reference ZIP and provenance are authenticated in the
+          # preceding IKHEADERS step. Unzip complete reference for binary gate.
+          printf '%s  %s\n' 44412b170b639ebbbf6615e4a302ec8e4a83e09a934e32da49bbc1c801755230 \
+            workspace/p479-reference-14131467025.zip | sha256sum -c -
+          unzip -q workspace/p479-reference-14131467025.zip -d workspace/p479-reference
+          python3 scripts/p479_equivalence_gate.py \
+            --build workspace/gki-phase199-out \
+            --reference workspace/p479-reference \
+            --report phase447-inventory/P479-WX-EQUIVALENCE-PROOF.json
+          echo 'P479 SHA-pinned WX equivalent to run 43638159300: config, map, ELF alloc sections, all native H4/CDC markers PASS. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive complete equivalent P479 source permanently (only after proof PASS)
+        if: success() && matrix.variant.id == 'G'
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/p479_export_verified_full_source.sh
+          bash scripts/p479_export_verified_full_source.sh
+      - name: Publish P479 equivalence evidence (NOT a flash authorization)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: P479-WX-EQUIVALENCE-PROOF-${{ github.run_id }}
+          path: phase447-inventory/P479-WX-EQUIVALENCE-PROOF.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Upload P470-A6 verified boot-v2 candidate for controlled first-flash REVIEW
+        if: success() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P479-H4-ONLY-HLT-${{ github.run_id }}-${{ github.sha }}
+          path: |
+            phase447b-variants/MANGROVE-P479-H4-ONLY-HLT.boot.img
+            phase447-inventory/P474-CMDLINE-PAIR.json
+            phase447-inventory/P474-IDLE-SOURCE.json
+            phase447-inventory/P472-A2A-HLT-ACK-ION-SOURCE.json
+            docs/p472-a2a-hlt-firstboot-test.md
+            docs/p476-h2-only-firstboot-test.md
+            phase447-inventory/P475-S2-CABLE-SOURCE.json
+            phase447-inventory/P476-H2-SOURCE.json
+            phase447-inventory/P477-H3-SOURCE.json
+            phase447-inventory/P477-MGBATT-SHADOW-SOURCE.json
+            phase447-inventory/P472-A3B-SOURCE.json
+            phase447-inventory/P477B-A3B-DT-CONTRACT.json
+            scripts/477b_dt_contract_audit.py
+            phase447-inventory/P478-A3C-KONA-PREFLIGHT.json
+            phase447-inventory/P479-H4-SOURCE.json
+            phase447-inventory/P479-MGBATT-SHADOW3-SOURCE.json
+            scripts/479_h4_auto.py
+            scripts/479_mgbatt_shadow3.py
+            scripts/478_a3c_kona_preflight.py
+            scripts/477_h3_dcp_stepped.py
+            scripts/477_mgbatt_shadow_stage.py
+            scripts/472_a3b_lpass_codec_d54.py
+            docs/p477-a3b-h3-shadow1-hlt-test-sheet.md
+            docs/p477-a3b-54-api-donor-and-r02-audit.md
+            phase447-inventory/P472-A3A-Q6-SOURCE.json
+            docs/p472-a3a-q6-firstboot-test.md
+            docs/p472-a3a-a3c-q6-kbuild-and-kona-5_4-donor-audit.md
+            phase447-inventory/P470-A6-BOOTV2-REPACK.json
+            phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+            phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
+            phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
+            phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P473-B0-NATIVE-SOURCE.json
+            phase447-inventory/P473-B1-SOURCE.json
+            phase447-inventory/P473-B2-SOURCE.json
+            phase447-inventory/P473-B3-SOURCE.json
+            phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P479-H4-ONLY-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A1-TG-APR-SOURCE.json
+            phase447-inventory/P472-A1-DONOR-INVENTORY.json
+            phase447-inventory/P471-D1-COMPILED.config
+            phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
+            phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
+            docs/p471-d0-mobile-data-provider-abi-audit.md
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.vmlinux
+            phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map
+            phase447-inventory/P471-D1-DATARMNET-CANDIDATE-SYMBOLS.sha256
+          if-no-files-found: error
+          compression-level: 1
+      - name: Upload P470-A6b #678 source-equivalent DWARF forensic rebuild (NO FLASH)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A6B-678-B710980D-FAULT-DECODE-${{ github.run_number }}
+          path: |
+            phase447-inventory/P470-A6B-678-FORENSICS/
+          if-no-files-found: warn
+          compression-level: 6
+      - name: Upload P470-A3 native built-in link diagnostics (NO IMAGE)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MANGROVE-P470-A6B-BUILTIN-SSR-ABI-DIAGNOSTICS-${{ github.run_number }}
+          path: |
+            phase447-inventory/P452-H01-SOURCE-SAFETY.json
+            phase447-inventory/P470-A3-BUILTIN-PREFLIGHT.json
+            phase447-inventory/P470-A4-ARM-MSS-READY.json
+            phase447-inventory/P470-A4-PACKED-DTB-AUDIT.json
+            phase447-inventory/P470-A4B-MERGED-DTB-PROVENANCE.json
+            phase447-inventory/P470-A4B-MSS-NOTIFIER.json
+            phase447-inventory/P470-A5-LEGACY-BUS-VOTE-BLOCKER.json
+            phase447-inventory/P470-A5-LIVE-FDT-ABI.json
+            phase447-inventory/P470-A6-REAL-TG-BUS-VOTES.json
+            phase447-inventory/P470-A6B-MSS-SSR-ABI-GUARD.json
+            phase447-inventory/P470-A6B-SSR-PREPROCESS-ABI.json
+            phase447-inventory/P470-A6C-NOTIFIER-SOURCE-ROUTE.json
+            phase447-inventory/P470-A6D-FW-SMMU-CB-SOURCE.json
+            phase447-inventory/P470-A6E-CLIENTS-SOURCE.json
+            phase447-inventory/P470-A6E-MANAGER-INITCALL-MAP.json
+            phase447-inventory/P470-A6F-QMI-TG47-SOURCE-PARITY.json
+            phase447-inventory/P470-A6G-STATS-SOURCE-PARITY.json
+            phase447-inventory/P471-D1-RMNET-ABI-SOURCE.json
+            phase447-inventory/P473-B0-NATIVE-SOURCE.json
+            phase447-inventory/P473-B1-SOURCE.json
+            phase447-inventory/P473-B2-SOURCE.json
+            phase447-inventory/P473-B3-SOURCE.json
+            phase447-inventory/P472-A0-NATIVE-SOURCE.json
+            phase447-inventory/P479-H4-ONLY-HLT-IMAGE-PROVENANCE.txt
+            phase447-inventory/P472-A1-TG-APR-SOURCE.json
+            phase447-inventory/P472-A1-DONOR-INVENTORY.json
+            phase447-inventory/P471-D1-COMPILED.config
+            phase447-inventory/P471-D1B-TG-NETFILTER-ABI.json
+            phase447-inventory/P471-D1B-TG-NETFILTER-ABI.md
+            docs/p471-d0-mobile-data-provider-abi-audit.md
+            phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-ABI.json
+            phase447-inventory/P470-A6C-NOTIFIER-PREPROCESS-COMPILE.log
+            phase447-inventory/P470-A6C-CPP-REAL-COMPILER.json
+            phase447-inventory/P470-A6-BOOTV2-REPACK.json
+            phase447-inventory/P470-A6-CANDIDATE-REVIEW.json
+            phase447-inventory/P470-A4-DMA-IOVA-TRACE.json
+            phase447-inventory/P470-A3-BUILTIN-LINK.log
+            phase447-inventory/P470-A3-FLASHABILITY-BLOCKERS.json
+            scripts/470_a3_stage_builtin.py
+            scripts/470_a4b_merged_dtb_audit.py
+            scripts/470_a4b_mss_notifier.py
+            scripts/470_a5_bus_prearm_gate.py
+            scripts/470_a5_live_ipa_audit.py
+            scripts/470_a6_tg_msm_bus_votes.py
+            scripts/470_a6_candidate_gate.py
+            scripts/470_a6b_mss_ssr_abi_guard.py
+            scripts/470_a6b_ssr_preprocessed_audit.py
+            scripts/470_a6c_notifier_abi.py
+            scripts/470_a6d_ipa_fw_smmu_cb.py
+            scripts/470_a6e_ipa_clients_ready.py
+            scripts/470_a6e_map_initcall_audit.py
+            scripts/470_a6f_qmi_tg_parity.py
+            scripts/470_a6g_ipa47_stats_tg.py
+            scripts/471_d1_datarmnet_stage.py
+            scripts/471_d1_tg_netfilter_audit.py
+            scripts/470_a6c_notifier_preprocess_audit.py
+            scripts/470_a6c_kbuild_cpp_replay.py
+          if-no-files-found: warn
+          compression-level: 6
+ "$BUILD/System.map"
+          echo 'P479 native headers content audited, original IKHEADERS bytes pinned, Image relinked. Strict equivalence next. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish independent P479 IKHEADERS content parity evidence (NO FLASH)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: P479-IKHEADERS-SEMANTIC-PROOF-${{ github.run_id }}
+          path: phase447-inventory/P479-IKHEADERS-PROVENANCE.json
+          if-no-files-found: warn
+          retention-days: 90
       - name: P479 fail-closed equivalence to original run 43638159300 (NO FLASH)
         if: success() && matrix.variant.id == 'G'
         run: |
