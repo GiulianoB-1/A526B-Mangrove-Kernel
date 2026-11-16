@@ -37,12 +37,30 @@ jobs:
           raw=zlib.decompress(base64.b64decode(p.read_text().strip(),validate=True))
           assert hashlib.sha256(raw).hexdigest()=='c589faa4a829d56a394a839349b8d23f250c467522aa3781927504c2873edc37'
           Path('scripts/446t_apply_smmu_hold_no_nested.py').write_bytes(raw)
+          p=Path('scripts/446y_apply_handoff_i2c.py.z64')
+          raw=zlib.decompress(base64.b64decode(p.read_text().strip(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='0cd9a1eea938e8f3aa74e48d9b11b89cdfacfce3defb476e069d292774beb81d'
+          old=b'    if (!gi2c->se.wrapper)\\n        return -EPROBE_DEFER;'
+          new=b'    if (!gi2c->se.wrapper) {\\n        return -EPROBE_DEFER;\\n    }'
+          assert raw.count(old)==1
+          raw=raw.replace(old,new,1)
+          assert hashlib.sha256(raw).hexdigest()=='d9b95c7f7ee9ccc14e590d82a5d6b91f737c504babc63132d0488fc0447016b7'
+          Path('scripts/446y_apply_handoff_i2c.py').write_bytes(raw)
           PY
           python3 scripts/446t_apply_smmu_hold_no_nested.py --root "$ROOT" --check-only
           while IFS= read -r stage; do
             test -n "$stage" || continue
             python3 "scripts/$stage.py" --root "$ROOT" --check-only
           done <<'AUDITS'
+          446r2_bound_rpmh_tcs
+          446r2_apply_pon_wake_diag
+          446s_apply_memlat_guards
+          446s_apply_arm_memlat_pmu
+          446s_port_legacy_pmic_gpio
+          446s_apply_suspend_timing
+          446s_apply_frame_trace
+          446s_apply_gpu_slumber_trace
+          446s_apply_kgsl_smmu_runtime_pm
           446t_early_frame_trace
           446u_apply_atomic_request_trace
           446u_expand_p445_store
@@ -56,6 +74,7 @@ jobs:
           446w_b_apply_first_hwc_modeset
           446w_b_apply_dsi_path_trace
           446x_apply_stm_touch
+          446y_apply_handoff_i2c
           446y_fix_geni_clock_unwind
           446z_apply_qup_core_touch
           446aa_trace_touch_drm
@@ -78,6 +97,33 @@ jobs:
           479_h4_auto
           479_mgbatt_shadow3
           472_a3b_lpass_codec_d54
+          447d_se7_se10_i2c
+          447d_readonly_sm5714_fg
+          447e_samsung_battery_platform
+          447e_alias_audit
+          447f_tg_i2c_nr
+          447f_sm5714_fg_child
+          447f_soc_scaling
+          447g_chg_guard
+          447g_ntc_iio
+          447g_adc5_gpio2
+          447h_adc5_tg_ntc
+          447h_ntc_retry
+          447h_tchg_ntc
+          447h_soc_policy
+          449f_chg_ntc_guard
+          450_daily_fg_and_guard_diag
+          451_daily_readonly
+          453_daily_usb_resume
+          447j_vblank_diag
+          447k_vblank_hooks
+          447i_touch_lifecycle_trace
+          447l_usb_stage_diag
+          447n_late_touch_usb_function
+          473_b1_probe_guard
+          473_b2_se1_pinctrl
+          473_b3_se1_baud
+          472_a1_tg_native
           AUDITS
           grep -Fxq 'CONFIG_P479_H4=y' "$ROOT/ci/build.config"
           grep -Fxq 'CONFIG_SECURITY_SELINUX=y' "$ROOT/ci/build.config"
