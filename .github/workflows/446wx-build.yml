@@ -232,9 +232,21 @@ jobs:
           set -Eeuo pipefail
           mkdir -p workspace/phase446s-inputs workspace/phase446s-boot gki/common
           API="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts"
-          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+          # The historical Actions artifact can expire (HTTP 410). If a
+          # verbatim original ZIP was backed up as a GitHub Release asset,
+          # use it, but NEVER relax the exact Phase446S SHA/manifest gates.
+          if ! curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "$API/12106509365/zip" -o workspace/phase446s-inputs.zip
+            "$API/12106509365/zip" -o workspace/phase446s-inputs.zip; then
+            rm -f workspace/phase446s-inputs.zip
+            echo '::warning title=Phase446S original source artifact unavailable::Attempting byte-identical GitHub Release backup'
+            if ! gh release download phase446s-verbatim-backup \
+              --repo "$GITHUB_REPOSITORY" --pattern phase446s-inputs.zip \
+              --dir workspace --clobber; then
+              echo '::error title=Phase446S provenance unavailable::Original source artifact 12106509365 is gone; upload the original phase446s-inputs.zip to release phase446s-verbatim-backup (SHA256 2c7e02b424df29f17ef16087864dacd2068293fb70d6be823de0c85ab7715533). No source substitution or flash.'
+              exit 1
+            fi
+          fi
           printf '%s  %s\n' 2c7e02b424df29f17ef16087864dacd2068293fb70d6be823de0c85ab7715533 workspace/phase446s-inputs.zip | sha256sum -c -
           unzip -q workspace/phase446s-inputs.zip -d workspace/phase446s-inputs
           python3 - <<'PY'
@@ -271,9 +283,18 @@ jobs:
           git -C gki/common reset --mixed "$GKI_COMMON_SHA"
           test "$(git -C gki/common rev-parse HEAD)" = "$GKI_COMMON_SHA"
           grep -Fq 'A52_PHASE446R_COMMIT_GEM_LIFETIME_V1' gki/common/drivers/a52_display/msm/msm_atomic.c
-          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+          if ! curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "$API/12106519108/zip" -o workspace/phase446s-boot.zip
+            "$API/12106519108/zip" -o workspace/phase446s-boot.zip; then
+            rm -f workspace/phase446s-boot.zip
+            echo '::warning title=Phase446S original boot artifact unavailable::Attempting byte-identical GitHub Release backup'
+            if ! gh release download phase446s-verbatim-backup \
+              --repo "$GITHUB_REPOSITORY" --pattern phase446s-boot.zip \
+              --dir workspace --clobber; then
+              echo '::error title=Phase446S boot provenance unavailable::Original boot artifact 12106519108 is gone; upload the original phase446s-boot.zip to release phase446s-verbatim-backup (SHA256 406a9c65e1d6550869b4628f7bd06694b03dd486982831bc8a6790c3a1bdc383). No boot substitution or flash.'
+              exit 1
+            fi
+          fi
           printf '%s  %s\n' 406a9c65e1d6550869b4628f7bd06694b03dd486982831bc8a6790c3a1bdc383 workspace/phase446s-boot.zip | sha256sum -c -
           unzip -q workspace/phase446s-boot.zip -d workspace/phase446s-boot
           test "$(find workspace/phase446s-boot -name 'boot-f0bisect-gki-p6-v1.img' -type f | wc -l)" -eq 1
