@@ -1,0 +1,47 @@
+name: P479 IKHEADERS provenance script smoke (NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-ikheaders-smoke
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate script syntax and explicitly opt-in generator hook
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/p479_ikheaders_pin.py
+          python3 - <<'PY'
+          import tempfile,subprocess,sys
+          from pathlib import Path
+          sys.path.insert(0,"scripts")
+          import p479_ikheaders_pin as m
+          assert m.EXPECTED_REF_IKHEADERS == "4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976"
+          assert m.harmless_volatile("./include/generated/compile.h",
+            b'#define UTS_VERSION "old"\n#define LINUX_COMPILER "clang14"\n',
+            b'#define UTS_VERSION "new"\n#define LINUX_COMPILER "clang14"\n')
+          assert not m.harmless_volatile("./include/generated/compile.h",
+            b'#define UTS_VERSION "old"\n#define LINUX_COMPILER "clang14"\n',
+            b'#define UTS_VERSION "new"\n#define LINUX_COMPILER "clang16"\n')
+          assert m.harmless_volatile("./include/generated/a52_446s_manifest.h",
+            b'#define A52_446S_FINGERPRINT "'+b'a'*64+b'"\n',
+            b'#define A52_446S_FINGERPRINT "'+b'b'*64+b'"\n')
+          with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            script=root/"kernel/gen_kheaders.sh"
+            script.parent.mkdir(parents=True)
+            script.write_text('#!/bin/sh\nset -e\nsfile="$(readlink -f "$0")"\ntarfile=$1\nprintf native > "$tarfile"\n')
+            m.install_opt_in_generator(root)
+            subprocess.run(["sh","-n",str(script)],check=True)
+            archive=root/"native.tar"
+            subprocess.run(["sh",str(script),str(archive)],check=True)
+            assert archive.read_bytes()==b"native"
+            test=subprocess.run(["sh",str(script),str(root/"out.tar")],
+              env={"MANGROVE_P479_PIN_IKHEADERS":"1","PATH":"/usr/bin:/bin"},
+              capture_output=True)
+            assert test.returncode != 0, "invalid fake seed must fail closed"
+          print('P479 IKHEADERS audit logic and env-gated generator hook PASS')
+          PY
