@@ -18,19 +18,22 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Toolchain and build inputs
+      - name: Toolchain and exact build config from this pinned source commit
         run: |
           set -Eeuo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y clang lld llvm binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu
-          test -s ci/P479.config
-          test -s ci/P479-final-tree-manifest.json
+          # P479 baseline starts with ci/build.config copied from verified P479.config.
+          # P480 and later source commits MUST update ci/build.config and
+          # ci/build-manifest.json together, in the same source commit.
+          test -s ci/build.config
+          test -s ci/build-manifest.json
           mkdir -p out include/generated
-          cp ci/P479.config out/.config
+          cp ci/build.config out/.config
           python3 - <<'PY'
           import json
           from pathlib import Path
-          manifest=json.loads(Path('ci/P479-final-tree-manifest.json').read_text())
+          manifest=json.loads(Path('ci/build-manifest.json').read_text())
           assert manifest['strict'] is True and not manifest['missing_required']
           fp=manifest['source_fingerprint_sha256']
           Path('include/generated/a52_446s_manifest.h').write_text(
@@ -38,7 +41,7 @@ jobs:
           PY
           make O="$PWD/out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
-          cmp ci/P479.config out/.config
+          cmp ci/build.config out/.config
       - name: Build checked-out source, no source patching
         env:
           LOCALVERSION: ''
