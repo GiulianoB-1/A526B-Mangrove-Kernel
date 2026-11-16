@@ -1,0 +1,88 @@
+name: Preserve Phase446WX source archives as permanent release assets
+
+on:
+  push:
+    branches:
+      - agent/phase446wx-source-backup-release
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Download exact original GitHub Actions ZIP archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p preserved
+          for id in 12271681215 12137476816 12140096383; do
+            curl --fail --location --retry 4 --retry-all-errors --silent --show-error \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${REPO}/actions/artifacts/${id}/zip" \
+              --output "preserved/phase446wx-artifact-${id}.zip"
+          done
+          cat > preserved/SHA256SUMS <<'SUMS'
+          4a67e19ed23935ea6596a76cfc5f28d434cd37b7061ab7bc520a7a0ce8137a6b  phase446wx-artifact-12271681215.zip
+          7f2e2ee7ef0f0570420f370a27aeacd1d2e64b979b399c22b883efcc9e1abb38  phase446wx-artifact-12137476816.zip
+          c32f55d40a46ec2bbf6fb8d713ae8d2bb3c3abeb691120e727ef72860d76e8c2  phase446wx-artifact-12140096383.zip
+          SUMS
+          (cd preserved && sha256sum -c SHA256SUMS)
+      - name: Verify embedded source tarballs and configs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          check_inside() {
+            local id="$1" file="$2" expected="$3"
+            actual="$(unzip -p "preserved/phase446wx-artifact-${id}.zip" "${file}" | sha256sum | awk '{print $1}')"
+            test "${actual}" = "${expected}" || {
+              echo "::error::${id} ${file}: checksum mismatch"; exit 1;
+            }
+          }
+          check_inside 12271681215 final-patched-gki-source.tar.zst d57c5c82bc938a6d582f0d676eddc3fdb9c6d0689bf2de6c7b5cd9e8538e13a8
+          check_inside 12271681215 final.config 26f64921f357bd66469f04fc7fcaea4e60a47f8ce49980e3923f4c91cf28a737
+          check_inside 12137476816 final-patched-gki-source.tar.zst 42d8bf75a0d739ba6f2adc2a876704945d5bf02a30472a6b06b5fb1408097e9e
+          check_inside 12137476816 final.config 257d2483727899e31134fce8a6617515986df7f6bfef2ab59ef0e5fe20d71684
+          check_inside 12140096383 final-patched-gki-source.tar.zst 45f0d351c2e0bc1583bb780593a7966ed90191db2c921c7d34558169ccfb2cf7
+          check_inside 12140096383 final.config d32ed244f76c73d52e94bccacac8dfb0356b9f9cddd3d56820feb4d6644c9b3e
+      - name: Publish immutable-checksum source backup release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if gh release view phase446wx-source-backup >/dev/null 2>&1; then
+            echo "::error::Release phase446wx-source-backup already exists; will not overwrite"
+            exit 1
+          fi
+          cat > preserved/RELEASE-NOTES.txt <<'NOTES'
+          Phase446WX original GitHub Actions artifact ZIP archives saved before expiry.
+          These are backup sources, not flashable builds.
+          Preferred source: artifact 12271681215, internal tar SHA256
+          d57c5c82bc938a6d582f0d676eddc3fdb9c6d0689bf2de6c7b5cd9e8538e13a8
+          Internal source fingerprint:
+          fb330e2da844e7b8b8b3043f7de3fdad5c6c2f9c3caae7c58ce6ad10a47eca8e
+          Internal final.config SHA256:
+          26f64921f357bd66469f04fc7fcaea4e60a47f8ce49980e3923f4c91cf28a737
+          Original 446S restore path intentionally retained as an alternative.
+          NO FLASHING until P479 equivalence proof passes.
+          NOTES
+          gh release create phase446wx-source-backup \
+            --target "${GITHUB_SHA}" \
+            --title "Phase446WX source backup (verified original archives)" \
+            --notes-file preserved/RELEASE-NOTES.txt \
+            --latest=false \
+            preserved/phase446wx-artifact-12271681215.zip \
+            preserved/phase446wx-artifact-12137476816.zip \
+            preserved/phase446wx-artifact-12140096383.zip \
+            preserved/SHA256SUMS
