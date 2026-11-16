@@ -1056,7 +1056,13 @@ jobs:
           set -Eeuo pipefail
           ROOT="$PWD/gki/common"
           test -f "$ROOT/drivers/a52_pil/subsystem_restart.c"
-          bash scripts/446z_package_preserved.sh
+          if [ "$MANGROVE_RESTORE_BASE" = wx ]; then
+            bash -n scripts/446z_package_preserved_wx.sh
+            python3 -m py_compile scripts/446wx_verify_inherited_boot_token.py
+            bash scripts/446z_package_preserved_wx.sh
+          else
+            bash scripts/446z_package_preserved.sh
+          fi
           python3 -m py_compile scripts/447c_finalize_variant.py
           python3 scripts/447c_finalize_variant.py \
             --source f0bisect-gki-p6-out/package/boot-f0bisect-gki-p6-v1.img \
