@@ -1,0 +1,30 @@
+name: Source migration lint (no source publication, no flash)
+on:
+  push:
+    branches:
+      - agent/p479-source-migration-prep
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check new gated recovery and source migration scripts
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/452_apply_phase_chain_from_wx.sh
+          bash -n scripts/recover_phase446wx_or_446s.sh
+          bash -n migration/create_p479_source_baseline.sh
+          python3 -m py_compile scripts/p479_equivalence_gate.py
+          python3 -m pip install --quiet --user PyYAML
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          for filename in ('migration/source-ci/direct-source-build.yml',
+                           'migration/source-ci/source-safety-audit.yml'):
+              obj=yaml.safe_load(Path(filename).read_text())
+              assert 'jobs' in obj, filename
+              print('lint PASS:', filename)
+          PY
+          echo 'Gated migration scripts and source-only workflows lint PASS. No repository created.' >> "$GITHUB_STEP_SUMMARY"
