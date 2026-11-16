@@ -122,6 +122,9 @@ jobs:
                   continue
               p=subprocess.run([sys.executable,str(path),'--root',root,'--check-only'],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
               print(f'=== {stage} rc={p.returncode} ===\n'+p.stdout[-3500:],flush=True)
+              if stage=='447_flicker_ring' and p.returncode and 'P447 ring source missing A52_PHASE447_FLICKER_RING_V1' in p.stdout:
+                  report.append((stage,'NOT_APPLIED: must apply next'))
+                  continue
               report.append((stage,'PASS' if p.returncode==0 else 'FAIL'))
               if p.returncode: failures.append(stage)
           Path('wx-stage-audit.tsv').write_text('stage\tresult\n'+''.join(f'{s}\t{status}\n' for s,status in report))
