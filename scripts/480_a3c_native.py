@@ -741,6 +741,8 @@ static const char *p480_skip_reason(const struct snd_soc_dai_link *l)
         "msm-pcm-routing", "msm-pcm-dsp-noirq", "msm-compr-dsp"
     };
     bool valid = false;
+    if (l->ignore)
+        return "NO_HOST_CORE_ABI_NOT_PORTED";
     for (k = 0; k < ARRAY_SIZE(unsupported); k++)
         if (strstr(n, unsupported[k]))
             return "UNPORTED_OR_VOICE_LINK";
@@ -809,6 +811,62 @@ def adapt_machine(source):
         raise RuntimeError("P480 pinned Kona codec DAI ABI drift")
     source = source.replace("rtd->cpu_dai", "asoc_rtd_to_cpu(rtd, 0)")
     source = source.replace("rtd->codec_dai", "asoc_rtd_to_codec(rtd, 0)")
+    # P480 5.4 -> 5.10 Kona compatibility, strictly bounded to pinned donor.
+    qos_old = re.compile(
+        r'static int msm_fe_qos_prepare\(struct snd_pcm_substream \*substream\)'
+        r'\n\{[\s\S]*?\n\}')
+    qos_matches = list(qos_old.finditer(source))
+    if len(qos_matches) != 1 or any(
+            token not in qos_matches[0].group(0)
+            for token in ("pm_qos_request_active", "pm_qos_remove_request",
+                          "PM_QOS_REQ_AFFINE_CORES", "pm_qos_add_request")):
+        raise RuntimeError("P480 Kona 5.4 QoS preparation drift")
+    # 5.10 supports CPU latency QoS but not the donor's core-1/2 request
+    # affinity. Advertise the difference when low-latency FE is used.
+    qos_new = (
+        "static int msm_fe_qos_prepare(struct snd_pcm_substream *substream)\n"
+        "{\n"
+        "\tif (!IS_ENABLED(CONFIG_CPU_IDLE))\n"
+        "\t\treturn -EOPNOTSUPP;\n"
+        "\tif (cpu_latency_qos_request_active(&substream->latency_pm_qos_req))\n"
+        "\t\tcpu_latency_qos_remove_request(&substream->latency_pm_qos_req);\n"
+        "\tpr_warn_once(\"P480 A3c QoS: 5.10 global CPU latency request; donor core 1/2 affinity unavailable\\n\");\n"
+        "\tcpu_latency_qos_add_request(&substream->latency_pm_qos_req,\n"
+        "\t\t\t\t    MSM_LL_QOS_VALUE);\n"
+        "\treturn 0;\n"
+        "}"
+    )
+    source = qos_old.sub(lambda _: qos_new, source, count=1)
+    source = one(source, "#include <linux/clk.h>",
+                 "#include <linux/clk.h>\n#include <linux/pm_qos.h>",
+                 "Kona 5.10 CPU latency QoS header")
+
+    # 5.10 aux devices moved the identifying fields into their DLC.
+    for old, new, expected in (
+            ("msm_aux_dev[i].name", "msm_aux_dev[i].dlc.name", 2),
+            ("msm_aux_dev[i].codec_of_node",
+             "msm_aux_dev[i].dlc.of_node", 2)):
+        if source.count(old) != expected:
+            raise RuntimeError("P480 Kona auxiliary DLC ABI drift " + old)
+        source = source.replace(old, new)
+
+    # 5.10 DPCM preparation is synchronous by default. The donor's
+    # CONFIG_AUDIO_QGKI async_ops extension cannot be used unchanged.
+    async_re = re.compile(
+        r'(?m)^[ \t]*\.async_ops\s*=\s*'
+        r'ASYNC_DPCM_SND_SOC_(?:PREPARE|HW_PARAMS),\s*\n')
+    if len(async_re.findall(source)) != 5:
+        raise RuntimeError("P480 Kona asynchronous DPCM ABI drift")
+    source = async_re.sub("", source)
+    # Do not reinterpret a 5.4 hostless FE as a 5.10 ordinary host PCM!
+    # The 5.10 core has no no_host_mode. Mark these links ignored and
+    # have p480_filter_links report/skip them before card registration.
+    nohost_re = re.compile(
+        r'(?m)^([ \t]*)\.no_host_mode\s*=\s*'
+        r'SND_SOC_DAI_LINK_NO_HOST,')
+    if len(nohost_re.findall(source)) != 21:
+        raise RuntimeError("P480 Kona no-host core ABI drift")
+    source = nohost_re.sub(r'\1.ignore = 1,', source)
     # Exclude the physical WSA speaker AUX devices but keep the real
     # WCD938x AUX device needed by the headset microphone path.
     source = one(source,
@@ -996,6 +1054,11 @@ config P480_A3C
     inventory["real_provider_probe_wrappers"] = log_names
     inventory["machine_source"] = "Samsung SM7325 5.4 Kona adapted with pinned TG r02 contract"
     inventory["A3c_hardware_verified"] = False
+    inventory["hostless_dpcm_5_4_core_semantics_ported"] = False
+    inventory["no_host_links_fail_closed"] = 21
+    inventory["async_dpcm_5_4_extension_disabled_for_5_10"] = True
+    inventory["low_latency_qos_affinity_5_10_difference"] = (
+        "5.10 CPU latency QoS has no donor core-1/2 affinity")
     inventory["fallback_unchanged_when_CONFIG_P480_A3C_n"] = True
     inventory["no_voice_init"] = True
     inventory["no_TAS256x"] = True
@@ -1082,6 +1145,19 @@ def check(root):
             s.count("asoc_rtd_to_cpu(rtd, 0)") != 12 or
             s.count("asoc_rtd_to_codec(rtd, 0)") != 5):
         raise RuntimeError("P480 5.10 Kona CPU/codec DAI accessor bridge missing")
+    # Hostless FE must not acquire host PCM semantics silently.
+    if (s.count(".ignore = 1,") != 21 or
+            ".no_host_mode" in s or ".async_ops" in s or
+            "NO_HOST_CORE_ABI_NOT_PORTED" not in s):
+        raise RuntimeError("P480 5.10 Kona hostless or sync-DPCM gate missing")
+    if (s.count("msm_aux_dev[i].dlc.name") != 2 or
+            s.count("msm_aux_dev[i].dlc.of_node") != 2 or
+            "msm_aux_dev[i].codec_of_node" in s):
+        raise RuntimeError("P480 5.10 auxiliary DLC bridge missing")
+    if ("#include <linux/pm_qos.h>" not in s or
+            "cpu_latency_qos_add_request(&substream->latency_pm_qos_req" not in s
+            or "PM_QOS_REQ_AFFINE_CORES" in s):
+        raise RuntimeError("P480 5.10 explicit CPU latency QoS bridge missing")
     if ".compress_ops = &p480_compr_ops" not in compr:
         raise RuntimeError("P480 real compress callback bridge missing")
     for driver_name, expected in (("msm-dai-fe.c", 185),
