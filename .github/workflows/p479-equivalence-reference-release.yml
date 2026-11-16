@@ -1,0 +1,58 @@
+name: Preserve P479 equivalence reference (no flashing)
+
+on:
+  push:
+    branches:
+      - agent/p479-equivalence-reference-release
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Download and verify exact P479 reference artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p preserved
+          curl --fail --location --retry 4 --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/14131467025/zip" \
+            -o preserved/p479-reference-14131467025.zip
+          cat > preserved/SHA256SUMS <<'SUMS'
+          44412b170b639ebbbf6615e4a302ec8e4a83e09a934e32da49bbc1c801755230  p479-reference-14131467025.zip
+          SUMS
+          (cd preserved && sha256sum -c SHA256SUMS)
+          unzip -p preserved/p479-reference-14131467025.zip phase447-inventory/P471-D1-COMPILED.config |
+            sha256sum | grep -Fxq '62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b  -'
+          unzip -p preserved/p479-reference-14131467025.zip phase447b-variants/P471-D1-DATARMNET-CANDIDATE.System.map |
+            sha256sum | grep -Fxq '26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e  -'
+      - name: Publish P479 comparison-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if gh release view p479-equivalence-reference --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo '::error::P479 reference release exists; no overwrite'; exit 1
+          fi
+          cat > preserved/notes.txt <<'NOTES'
+          Reference build P479 from GitHub Actions run 43638159300.
+          Commit e2e9f3fad600489deb8fa0816245a87cef6b9b95.
+          Workflow .github/workflows/446wx-build.yml.
+          Exact original artifact 14131467025 (ZIP).
+          P479 .config SHA256: 62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b.
+          P479 System.map SHA256: 26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e.
+          P479 raw Image SHA256: c1e29a64f611f402cdc8e5db1f42fea5b6ec9f48b19df60d5b9aa6da2d8585ae.
+          No flashing until restored-source equivalence passes.
+          NOTES
+          gh release create p479-equivalence-reference --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" --title "P479 original verified-build equivalence reference" \
+            --notes-file preserved/notes.txt --latest=false \
+            preserved/p479-reference-14131467025.zip preserved/SHA256SUMS
