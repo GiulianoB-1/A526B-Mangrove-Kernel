@@ -39,7 +39,7 @@ jobs:
           assert manifest['strict'] is True and not manifest['missing_required']
           assert manifest['source_fingerprint_sha256']=='fb330e2da844e7b8b8b3043f7de3fdad5c6c2f9c3caae7c58ce6ad10a47eca8e'
           assert manifest['kernel_config_sha256']=='26f64921f357bd66469f04fc7fcaea4e60a47f8ce49980e3923f4c91cf28a737'
-          assert manifest['workflow_id']==39431575680
+          assert manifest['workflow_id']=='39431575680'
           assert manifest['workflow_commit_sha']=='9314c6da8c4bc47b56e3539e5f5afc1d42bd4c9e'
           assert manifest['gki_common_pinned_sha']=='f960ed27302b1ff8e61e152fc202554d778deccd'
           inputs=json.loads((d/'FINAL-BUILD-INPUTS.json').read_text())
