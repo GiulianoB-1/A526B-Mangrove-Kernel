@@ -74,9 +74,45 @@ echo 'P479 equivalent restore: exact WX full source and matching boot SHA pins P
 set -Eeuo pipefail
 mkdir -p workspace/phase446s-inputs workspace/phase446s-boot gki/common
 API="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts"
-curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
-  -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-  "$API/12106509365/zip" -o workspace/phase446s-inputs.zip
+# The original 446S route stays supported. Once the user's October verbatim
+# archives are uploaded to phase446s-verbatim-backup, select them ONLY by the
+# exact pinned ZIP SHA256, independently of any asset filenames.
+# If the release exists but has an incorrect/missing ZIP, FAIL CLOSED:
+# never silently fall back to an unrelated artifact.
+USE_446S_RELEASE=0
+if gh release view phase446s-verbatim-backup --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+  USE_446S_RELEASE=1
+  mkdir -p workspace/phase446s-verbatim
+  gh release download phase446s-verbatim-backup --repo "$GITHUB_REPOSITORY" \
+    --pattern '*.zip' --dir workspace/phase446s-verbatim
+  SOURCE_MATCHES=0
+  BOOT_MATCHES=0
+  while IFS= read -r -d '' candidate; do
+    actual="$(sha256sum "$candidate" | cut -d' ' -f1)"
+    case "$actual" in
+      2c7e02b424df29f17ef16087864dacd2068293fb70d6be823de0c85ab7715533)
+        SOURCE_MATCHES=$((SOURCE_MATCHES+1))
+        cp "$candidate" workspace/phase446s-inputs.zip
+        ;;
+      406a9c65e1d6550869b4628f7bd06694b03dd486982831bc8a6790c3a1bdc383)
+        BOOT_MATCHES=$((BOOT_MATCHES+1))
+        cp "$candidate" workspace/phase446s-boot.zip
+        ;;
+    esac
+  done < <(find workspace/phase446s-verbatim -type f -name '*.zip' -print0)
+  if [ "$SOURCE_MATCHES" -ne 1 ] || [ "$BOOT_MATCHES" -ne 1 ]; then
+    echo "::error::446S verbatim backup must contain exactly one ZIP matching each existing pinned SHA"
+    exit 1
+  fi
+  echo 'Original Phase446S ZIPs loaded from release by exact original SHA256 pins' >> "$GITHUB_STEP_SUMMARY"
+else
+  echo '446S verbatim release not yet present; original artifact fallback retained' >> "$GITHUB_STEP_SUMMARY"
+fi
+if [ "$USE_446S_RELEASE" -eq 0 ]; then
+  curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+    -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+    "$API/12106509365/zip" -o workspace/phase446s-inputs.zip
+fi
 printf '%s  %s\n' 2c7e02b424df29f17ef16087864dacd2068293fb70d6be823de0c85ab7715533 workspace/phase446s-inputs.zip | sha256sum -c -
 unzip -q workspace/phase446s-inputs.zip -d workspace/phase446s-inputs
 python3 - <<'PY'
@@ -113,9 +149,11 @@ test "$(git -C gki/common rev-parse 'FETCH_HEAD^{commit}')" = "$GKI_COMMON_SHA"
 git -C gki/common reset --mixed "$GKI_COMMON_SHA"
 test "$(git -C gki/common rev-parse HEAD)" = "$GKI_COMMON_SHA"
 grep -Fq 'A52_PHASE446R_COMMIT_GEM_LIFETIME_V1' gki/common/drivers/a52_display/msm/msm_atomic.c
-curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
-  -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-  "$API/12106519108/zip" -o workspace/phase446s-boot.zip
+if [ "$USE_446S_RELEASE" -eq 0 ]; then
+  curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+    -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+    "$API/12106519108/zip" -o workspace/phase446s-boot.zip
+fi
 printf '%s  %s\n' 406a9c65e1d6550869b4628f7bd06694b03dd486982831bc8a6790c3a1bdc383 workspace/phase446s-boot.zip | sha256sum -c -
 unzip -q workspace/phase446s-boot.zip -d workspace/phase446s-boot
 test "$(find workspace/phase446s-boot -name 'boot-f0bisect-gki-p6-v1.img' -type f | wc -l)" -eq 1
