@@ -46,9 +46,14 @@ jobs:
           from pathlib import Path
           manifest=json.loads(Path('ci/build-manifest.json').read_text())
           assert manifest['strict'] is True and not manifest['missing_required']
-          fp=manifest['source_fingerprint_sha256']
-          Path('include/generated/a52_446s_manifest.h').write_text(
-              '#define A52_446S_FINGERPRINT "'+fp+'"\n')
+          # The complete source was committed directly. Never rewrite a
+          # tracked kernel header during CI; keep the exact committed source.
+          import re
+          header=Path('include/generated/a52_446s_manifest.h')
+          assert header.is_file()
+          assert re.fullmatch(r'\s*#define A52_446S_FINGERPRINT "[0-9a-f]{64}"\s*',
+                              header.read_text()), 'source manifest header invalid'
+          assert len(manifest['source_fingerprint_sha256']) == 64
           PY
           make O="$PWD/out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
