@@ -107,7 +107,7 @@ def install_opt_in_generator(root: Path) -> None:
     hook = '''%s
 # Activated solely by the P479 equivalence proof and baseline source build.
 # The native header tree MUST be semantically compared before opting in.
-if [ "\${MANGROVE_P479_PIN_IKHEADERS:-0}" = "1" ]; then
+if [ "${MANGROVE_P479_PIN_IKHEADERS:-0}" = "1" ]; then
     pin_file="$(dirname "$sfile")/../ci/P479-kheaders.tar.xz"
     printf '%%s  %%s\\n' %s "$pin_file" | sha256sum -c - >/dev/null
     if ! cmp -s "$pin_file" "$tarfile"; then
