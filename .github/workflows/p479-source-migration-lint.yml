@@ -22,7 +22,8 @@ jobs:
           from pathlib import Path
           import yaml
           for filename in ('migration/source-ci/direct-source-build.yml',
-                           'migration/source-ci/source-safety-audit.yml'):
+                           'migration/source-ci/source-safety-audit.yml',
+                           '.github/workflows/p479-source-repo-cutover.yml'):
               obj=yaml.safe_load(Path(filename).read_text())
               assert 'jobs' in obj, filename
               print('lint PASS:', filename)
