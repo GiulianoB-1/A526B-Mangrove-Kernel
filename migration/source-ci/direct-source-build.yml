@@ -17,6 +17,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0  # resolve the immutable p479-baseline tag
           persist-credentials: false
       - name: Toolchain and exact build config from this pinned source commit
         run: |
@@ -26,6 +27,16 @@ jobs:
           # P479 baseline starts with ci/build.config copied from verified P479.config.
           # P480 and later source commits MUST update ci/build.config and
           # ci/build-manifest.json together, in the same source commit.
+          # Only the *exact* immutable baseline commit is allowed to reseal
+          # generated IKHEADERS with the recorded P479 archive. Future P480
+          # commits always use the normal native kernel header generator.
+          BASELINE="$(git rev-list -n 1 p479-baseline)"
+          if [ "$BASELINE" = "$GITHUB_SHA" ]; then
+            printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 ci/P479-kheaders.tar.xz | sha256sum -c -
+            echo MANGROVE_P479_PIN_IKHEADERS=1 >> "$GITHUB_ENV"
+          else
+            echo MANGROVE_P479_PIN_IKHEADERS=0 >> "$GITHUB_ENV"
+          fi
           test -s ci/build.config
           test -s ci/build-manifest.json
           mkdir -p out include/generated
@@ -51,6 +62,9 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image vmlinux
           test -s out/arch/arm64/boot/Image
           test -s out/System.map
+          if [ "$MANGROVE_P479_PIN_IKHEADERS" = 1 ]; then
+            printf '%s  %s\n' 26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e out/System.map | sha256sum -c -
+          fi
           grep -Fxq 'CONFIG_P479_H4=y' out/.config
           grep -Fxq 'CONFIG_SECURITY_SELINUX=y' out/.config
           grep -aFq 'P479 H4 CABLE type=' out/arch/arm64/boot/Image
