@@ -47,6 +47,7 @@ on:
       - agent/p472-a3a-q6-services-from-p476-h2-hlt-no-arm
       - agent/p479-h4-shadow3-cdc-wake-no-arm
       - agent/p479-wx-equivalence-no-flash
+      - agent/p479-wx-equivalence-v2-no-flash
   workflow_dispatch:
     inputs:
       restore_mode:
