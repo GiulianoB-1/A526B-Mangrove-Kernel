@@ -1008,6 +1008,34 @@ def stage(root, tg, d54, report):
         to = dest / rel
         to.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(frm, to)
+    # The pinned 5.4 headers have non-inline static fallback functions for
+    # disabled physical WSA/Bolero codecs. 5.10 Clang -Werror rejects
+    # these definitions when they are unused. Mark only the seven exact
+    # preexisting fallback definitions inline; keep their bodies unchanged.
+    inline_fallbacks = (
+        ("codecs/wsa883x/wsa883x.h", (
+            ("int", "wsa883x_codec_get_dev_num"),
+        )),
+        ("codecs/bolero/bolero-cdc.h", (
+            ("bool", "bolero_is_va_macro_registered"),
+            ("int", "bolero_runtime_suspend"),
+            ("void", "bolero_wsa_pa_on"),
+            ("int", "bolero_get_version"),
+            ("int", "bolero_dmic_clk_enable"),
+            ("int", "bolero_tx_mclk_enable"),
+        )),
+    )
+    for rel, functions in inline_fallbacks:
+        header = dest / rel
+        contents = header.read_text()
+        if "#else" not in contents:
+            raise RuntimeError("P480 pinned codec fallback guard drift " + rel)
+        for ret_type, name in functions:
+            before = "static %s %s(" % (ret_type, name)
+            after = "static inline %s %s(" % (ret_type, name)
+            contents = one(contents, before, after,
+                           "unused disabled-codec fallback " + name)
+        header.write_text(contents)
     (dest / "p480-compress-abi.h").write_text(compress_compat_header(d54))
     log_names = {}
     for name in PROVIDERS:
@@ -1183,6 +1211,23 @@ def check(root):
         header = dest / rel
         if not header.is_file() or required not in header.read_text():
             raise RuntimeError("P480 pinned Kona bolero declaration missing " + rel)
+    # Check that all seven original disabled-codec fallback functions
+    # survive as inline definitions, without enabling physical drivers.
+    for rel, functions in (
+        ("codecs/wsa883x/wsa883x.h",
+         ("static inline int wsa883x_codec_get_dev_num(",)),
+        ("codecs/bolero/bolero-cdc.h", (
+            "static inline bool bolero_is_va_macro_registered(",
+            "static inline int bolero_runtime_suspend(",
+            "static inline void bolero_wsa_pa_on(",
+            "static inline int bolero_get_version(",
+            "static inline int bolero_dmic_clk_enable(",
+            "static inline int bolero_tx_mclk_enable(",
+        )),
+    ):
+        contents = (dest / rel).read_text()
+        if any(contents.count(symbol) != 1 for symbol in functions):
+            raise RuntimeError("P480 pinned unused fallback inline missing " + rel)
     pcm=(dest / "msm-pcm-q6-v2.c").read_text()
     compr=(dest / "msm-compress-q6-v2.c").read_text()
     # No local stubs may shadow the built-in QTI PP provider definitions.
