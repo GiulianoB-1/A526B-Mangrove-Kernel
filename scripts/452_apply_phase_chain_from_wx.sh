@@ -26,8 +26,8 @@ for src,dst,expect in sources:
     raw=zlib.decompress(base64.b64decode(Path(src).read_text().strip(),validate=True))
     assert hashlib.sha256(raw).hexdigest()==expect,src
     if '446y_' in src:
-        old=b'    if (!gi2c->se.wrapper)\\n        return -EPROBE_DEFER;'
-        new=b'    if (!gi2c->se.wrapper) {\\n        return -EPROBE_DEFER;\\n    }'
+        old=b'    if (!gi2c->se.wrapper)\n        return -EPROBE_DEFER;'
+        new=b'    if (!gi2c->se.wrapper) {\n        return -EPROBE_DEFER;\n    }'
         assert raw.count(old)==1, 'P446Y wrapper anchor mismatch'
         raw=raw.replace(old,new,1)
         assert hashlib.sha256(raw).hexdigest()=='d9b95c7f7ee9ccc14e590d82a5d6b91f737c504babc63132d0488fc0447016b7'
@@ -38,7 +38,7 @@ PY
 while IFS= read -r stage; do
   [ -n "$stage" ] || continue
   python3 "scripts/${stage}.py" --root "$ROOT" --check-only
-  printf 'SKIP verified already applied: %s\\n' "$stage" >> "$GITHUB_STEP_SUMMARY"
+  printf 'SKIP verified already applied: %s\n' "$stage" >> "$GITHUB_STEP_SUMMARY"
 done <<'PINNED_APPLIED_STAGES'
 446t_apply_smmu_hold_no_nested
 446t_early_frame_trace
@@ -81,7 +81,7 @@ grep -Fq 'P447 ring source missing A52_PHASE447_FLICKER_RING_V1' "$RUNNER_TEMP/p
 }
 python3 scripts/447_flicker_ring.py --root "$ROOT"
 python3 scripts/447_flicker_ring.py --root "$ROOT" --check-only
-printf 'APPLY P447 flicker ring: absence proven; patched once and verified\\n' >> "$GITHUB_STEP_SUMMARY"
+printf 'APPLY P447 flicker ring: absence proven; patched once and verified\n' >> "$GITHUB_STEP_SUMMARY"
 # Continue with original P479 stages P447D onward, including P448 through P479.
 # Only two already-contained source operations below are replaced by check-only gates:
 # P447C quiet trace and P446Z ReSukiSU integration. Config flags are preserved.
