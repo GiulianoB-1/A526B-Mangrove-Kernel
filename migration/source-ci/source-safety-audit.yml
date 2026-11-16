@@ -79,6 +79,6 @@ jobs:
           479_mgbatt_shadow3
           472_a3b_lpass_codec_d54
           AUDITS
-          grep -Fxq 'CONFIG_P479_H4=y' "$ROOT/ci/P479.config"
-          grep -Fxq 'CONFIG_SECURITY_SELINUX=y' "$ROOT/ci/P479.config"
+          grep -Fxq 'CONFIG_P479_H4=y' "$ROOT/ci/build.config"
+          grep -Fxq 'CONFIG_SECURITY_SELINUX=y' "$ROOT/ci/build.config"
           echo 'P479 read-only source contract gates PASS; charging hardware policy remains off by default; NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
