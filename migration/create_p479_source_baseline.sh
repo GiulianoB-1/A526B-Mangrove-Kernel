@@ -29,7 +29,16 @@ actual=hashlib.sha256(config.read_bytes()).hexdigest()
 assert actual==p['checks']['config_exact']['details']['built_sha256']
 m=json.loads(manifest.read_text())
 assert m['strict'] is True and not m['missing_required']
-assert m['kernel_config_sha256']==actual, 'manifest config identity differs'
+# This is the preserved Phase446S/WX ANCESTRY manifest, not the P479 build.
+# Phase446S final.config differs from the native P479 final.config by design.
+# The native P479 config has already been compared byte-for-byte to reference.
+assert len(m['kernel_config_sha256']) == 64, 'missing historical config digest'
+assert len(m['source_fingerprint_sha256']) == 64, 'missing source ancestry digest'
+assert m['kernel_config_sha256'] != actual, (
+    'unexpected ancestry/final config identity; audit independently before migration'
+)
+print('P479 equivalence config:', actual)
+print('Earlier 446S/WX ancestry config:', m['kernel_config_sha256'])
 print('P479 source migration proof gate PASS')
 PY
 STAGING="${RUNNER_TEMP:-/tmp}/p479-source-baseline"
@@ -51,6 +60,26 @@ cp "$MANIFEST" "$STAGING/ci/build-manifest.json"
 cp "$PROOF" "$STAGING/ci/P479-equivalence-proof.json"
 cp migration/source-ci/direct-source-build.yml "$STAGING/.github/workflows/direct-source-build.yml"
 cp migration/source-ci/source-safety-audit.yml "$STAGING/.github/workflows/source-safety-audit.yml"
+# Record the frozen source-generation ancestry separately from P479 final
+# .config; never present the Phase446S manifest as a P479 config manifest.
+python3 - "$STAGING/ci/P479.config" "$STAGING/ci/P479-final-tree-manifest.json" "$STAGING/ci/build-manifest.json" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+config,ancestor,output=map(Path,sys.argv[1:])
+a=json.loads(ancestor.read_text())
+out={
+    "schema":"mangrove-p479-source-ancestry-v1",
+    "stage":"P479-equivalent-source",
+    "kernel_config_sha256":hashlib.sha256(config.read_bytes()).hexdigest(),
+    "phase446wx_ancestry_manifest_sha256":hashlib.sha256(ancestor.read_bytes()).hexdigest(),
+    "source_fingerprint_sha256":a["source_fingerprint_sha256"],
+    "strict":a["strict"],
+    "missing_required":a["missing_required"],
+    "ancestry_strict_only":True,
+    "flash_authorized":False,
+}
+output.write_text(json.dumps(out,sort_keys=True,indent=2)+"\n")
+PY
 cat > "$STAGING/ci/BASELINE-PROVENANCE.md" <<'NOTES'
 # P479 verified Mangrove baseline
 
