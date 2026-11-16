@@ -45,7 +45,9 @@ test ! -s "$STAGING.source-compare.txt" || {
 test ! -e "$STAGING/KernelSU/.git"
 mkdir -p "$STAGING/ci" "$STAGING/.github/workflows"
 cp "$CONFIG" "$STAGING/ci/P479.config"
+cp "$CONFIG" "$STAGING/ci/build.config"
 cp "$MANIFEST" "$STAGING/ci/P479-final-tree-manifest.json"
+cp "$MANIFEST" "$STAGING/ci/build-manifest.json"
 cp "$PROOF" "$STAGING/ci/P479-equivalence-proof.json"
 cp migration/source-ci/direct-source-build.yml "$STAGING/.github/workflows/direct-source-build.yml"
 cp migration/source-ci/source-safety-audit.yml "$STAGING/.github/workflows/source-safety-audit.yml"
@@ -63,6 +65,9 @@ Reference binaries: legacy release p479-equivalence-reference.
 The entire kernel source, including KernelSU, is stored as one ordinary Git
 commit and tagged p479-baseline. Future changes such as P480 A3c must be direct
 source commits. No generated patch chains are used at build time.
+The preserved ci/P479.config + ci/P479-final-tree-manifest.json record the
+baseline. The active ci/build.config + ci/build-manifest.json may change in
+future direct source commits, starting with P480 A3c.
 NO FLASHING without separate authorization.
 NOTES
 export GH_TOKEN="$SOURCE_PUSH_TOKEN"
