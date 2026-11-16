@@ -1,0 +1,53 @@
+name: Migrate equivalence-proven P479 into direct-source Git repo (NO FLASH)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verified-source-cutover:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout pinned migration procedure
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch permanent P479 source release, never an expiring artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd rsync
+          mkdir -p p479-release p479-source-root
+          gh release download p479-verified-source-baseline \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'P479*' --pattern SHA256SUMS \
+            --dir p479-release
+          (cd p479-release && sha256sum -c SHA256SUMS)
+          tar --use-compress-program=zstd \
+            -xf p479-release/P479-verified-full-source.tar.zst \
+            -C p479-source-root
+          test -s p479-source-root/Makefile
+          test -d p479-source-root/KernelSU
+          test ! -e p479-source-root/.git
+          test ! -e p479-source-root/KernelSU/.git
+      - name: Commit one complete P479 baseline and tag (only with explicit authorized token)
+        env:
+          SOURCE_PUSH_TOKEN: ${{ secrets.SOURCE_REPO_PAT }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$SOURCE_PUSH_TOKEN" || {
+            echo '::error::Set SOURCE_REPO_PAT in repo Actions secrets, scoped to creating/pushing the source repo; no repo created'
+            exit 1
+          }
+          export P479_SOURCE_ROOT="$PWD/p479-source-root"
+          export P479_CONFIG="$PWD/p479-release/P479.config"
+          export P479_FINAL_TREE_MANIFEST="$PWD/p479-release/P479-final-tree-manifest.json"
+          export P479_EQUIVALENCE_REPORT="$PWD/p479-release/P479-equivalence-proof.json"
+          bash -n migration/create_p479_source_baseline.sh
+          bash migration/create_p479_source_baseline.sh
+          echo 'Verified P479 direct-source repository created with immutable p479-baseline tag. No flash authorized.' >> "$GITHUB_STEP_SUMMARY"
