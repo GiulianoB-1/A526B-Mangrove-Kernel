@@ -1,0 +1,46 @@
+name: Preserve matching Phase446WX boot template before expiry
+
+on:
+  push:
+    branches:
+      - agent/phase446wx-boot-template-backup
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download and verify matching boot ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p preserved
+          curl --fail --location --retry 4 --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/12272271056/zip" \
+            -o preserved/phase446wx-boot-template-12272271056.zip
+          cat > preserved/SHA256SUMS-BOOT <<'SUMS'
+          9586df44718ae3a84178ea43e4632db3c988c1652564c4586ed217e84c918efe  phase446wx-boot-template-12272271056.zip
+          SUMS
+          (cd preserved && sha256sum -c SHA256SUMS-BOOT)
+          unzip -p preserved/phase446wx-boot-template-12272271056.zip boot-f0bisect-gki-p6-v1.img |
+            sha256sum | grep -Fxq 'ef0f35ad261a072f301c6f52521c4ff33c59595dd09f4c42df55e7642bbc7b09  -'
+          unzip -p preserved/phase446wx-boot-template-12272271056.zip PHASE446S-MANIFEST.json |
+            sha256sum | grep -Fxq '6ba78a5b066abb6b2dd40341f8c0d39832322816d34aa33e0d33b41deddc45ef  -'
+      - name: Upload boot template to existing source backup release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh release view phase446wx-source-backup --repo "${GITHUB_REPOSITORY}" >/dev/null
+          gh release upload phase446wx-source-backup --repo "${GITHUB_REPOSITORY}" \
+            preserved/phase446wx-boot-template-12272271056.zip \
+            preserved/SHA256SUMS-BOOT
