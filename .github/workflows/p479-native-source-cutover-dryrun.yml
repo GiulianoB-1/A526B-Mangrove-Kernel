@@ -1,0 +1,66 @@
+name: P479 full native-source cutover dry-run (ONE COMMIT, NO PUSH, NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-source-migration-prep
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  one-commit-check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout migration scripts, not legacy source tree
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download and verify SHA-pinned P479 full source from permanent release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd rsync
+          mkdir -p "$RUNNER_TEMP/p479-verified-release" "$RUNNER_TEMP/p479-source-root"
+          gh release download p479-verified-source-baseline \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'P479*' --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/p479-verified-release"
+          (cd "$RUNNER_TEMP/p479-verified-release" && sha256sum -c SHA256SUMS)
+          printf '%s  %s\n' 43ecd5698f319328290721c4f79d1dddfe7e8acb30f4ba1c3a47629f2115d9e3 \
+            "$RUNNER_TEMP/p479-verified-release/P479-verified-full-source.tar.zst" | sha256sum -c -
+          printf '%s  %s\n' 62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b \
+            "$RUNNER_TEMP/p479-verified-release/P479.config" | sha256sum -c -
+          tar --use-compress-program=zstd \
+            -xf "$RUNNER_TEMP/p479-verified-release/P479-verified-full-source.tar.zst" \
+            -C "$RUNNER_TEMP/p479-source-root"
+          test -s "$RUNNER_TEMP/p479-source-root/Makefile"
+          test -f "$RUNNER_TEMP/p479-source-root/KernelSU/kernel/Kbuild"
+          test ! -e "$RUNNER_TEMP/p479-source-root/KernelSU/.git"
+      - name: Perform complete P479 native Git one-commit dry-run, no repository changes
+        env:
+          P479_MIGRATION_DRY_RUN: "1"
+        run: |
+          set -Eeuo pipefail
+          export P479_SOURCE_ROOT="$RUNNER_TEMP/p479-source-root"
+          export P479_CONFIG="$RUNNER_TEMP/p479-verified-release/P479.config"
+          export P479_FINAL_TREE_MANIFEST="$RUNNER_TEMP/p479-verified-release/P479-final-tree-manifest.json"
+          export P479_EQUIVALENCE_REPORT="$RUNNER_TEMP/p479-verified-release/P479-equivalence-proof.json"
+          bash -n migration/create_p479_source_baseline.sh
+          python3 -m py_compile migration/p479_kernelsu_direct.py
+          bash migration/create_p479_source_baseline.sh
+          cd "$RUNNER_TEMP/p479-source-baseline"
+          test "$(git rev-list --count HEAD)" = 1
+          test "$(git rev-parse p479-baseline^{commit})" = "$(git rev-parse HEAD)"
+          test -e ci/P479-KernelSU-direct-source.json
+          test ! -e KernelSU/.git
+          test -f KernelSU/.gitignore
+          test -f KernelSU/.gitattributes
+          git fsck --no-reflogs --full --no-progress
+          {
+            echo '### P479 ONE-COMMIT DRY-RUN PASS (NO PUSH, NO FLASH)'
+            echo "Commit SHA: $(git rev-parse HEAD)"
+            echo "Tracked files: $(git ls-files | wc -l)"
+            echo 'Native source is validated locally. Creating the destination repository still requires separately authorized SOURCE_REPO_PAT.'
+          } >> "$GITHUB_STEP_SUMMARY"
