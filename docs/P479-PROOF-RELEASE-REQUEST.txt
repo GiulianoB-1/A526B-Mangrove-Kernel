@@ -1,0 +1,3 @@
+Proof publication request for the authenticated P479 equivalence run 44026270014.
+The release tag intentionally references default branch main. The release assets cryptographically identify the real source producer commit 5e5db938a24068ae5a804b003e5cbe16d7f31438.
+The original and rebuilt Image SHA256 differ, so this is not byte-identical and is not flash authorization.
