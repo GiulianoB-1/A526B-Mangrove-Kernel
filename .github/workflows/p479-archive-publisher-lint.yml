@@ -1,0 +1,34 @@
+name: P479 verified-source fallback publisher lint (NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-equivalence-evidence-preserved
+      - agent/p479-source-publisher
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release publisher without token or source archive
+        run: |
+          set -Eeuo pipefail
+          bash -n migration/p479_publish_verified_source.sh
+          python3 -m pip install --user -q PyYAML
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          w=yaml.safe_load(Path(".github/workflows/p479-publish-from-fallback.yml").read_text())
+          assert "jobs" in w
+          s=Path("migration/p479_publish_verified_source.sh").read_text()
+          assert "P479_SOURCE_RUN_ID=44038773282" in s
+          assert "EXPECTED_BUILD_SHA=5e6fb4713022f22b417a9e6581cf3c5d9c2b16f5" in s
+          assert 'assert p["status"]=="PASS" and p["errors"]==[]' in s
+          assert 'assert p["image_hash_identical"] is False' in s
+          assert 'sha256sum -c SHA256SUMS' in s
+          assert "gh run download" in s and "gh release create" in s
+          assert not any(x in s for x in ("fastboot flash","heimdall flash","adb reboot bootloader"))
+          print("P479 archived source publisher lint PASS, no release attempted, no flash")
+          PY
