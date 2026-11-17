@@ -22,7 +22,7 @@ jobs:
           import p479_ikheaders_pin as m
           assert m.EXPECTED_REF_IKHEADERS == "4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976"
           assert m.EXPECTED_REF_COMPILE == "c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
-          assert m.EXPECTED_REF_MANIFEST == "30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3bde3906"
+          assert m.EXPECTED_REF_MANIFEST == "30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3b8de3906"
           # Both historical and WX fingerprints are fixed 64-character digests.
           def manifest(fingerprint):
               return ('#define A52_446S_FINGERPRINT "'+fingerprint+'"\n').encode()
