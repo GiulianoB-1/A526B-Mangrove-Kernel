@@ -76,7 +76,19 @@ jobs:
           test -s out/arch/arm64/boot/Image
           test -s out/System.map
           if [ "$MANGROVE_P479_PIN_IKHEADERS" = 1 ]; then
-            printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 out/include/generated/compile.h | sha256sum -c -
+            # gen_kheaders.sh strips block comments from archived compile.h.
+            # Compare fields exactly using its normalization, not raw bytes.
+            python3 - <<'PY'
+            from pathlib import Path
+            import hashlib, re
+            archived=Path('ci/P479-compile.h').read_bytes()
+            live=Path('out/include/generated/compile.h').read_bytes()
+            assert b"/* This file is auto generated, version 3 */" in live
+            assert b"/* SMP PREEMPT */" in live
+            normalized=re.sub(rb"/\*((?!SPDX).)*?\*/",b"",live,flags=re.S)
+            assert normalized==archived and hashlib.sha256(normalized).hexdigest()=="c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
+            print('Original P479 compile metadata reproduced (same normalized header)')
+            PY
             printf '%s  %s\n' 26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e out/System.map | sha256sum -c -
           fi
           grep -Fxq 'CONFIG_P479_H4=y' out/.config
