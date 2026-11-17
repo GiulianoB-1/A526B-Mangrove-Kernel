@@ -30,8 +30,14 @@ jobs:
           # Only the *exact* immutable baseline commit is allowed to reseal
           # generated IKHEADERS with the recorded P479 archive. Future P480
           # commits always use the normal native kernel header generator.
+          test ! -e KernelSU/.git
+          test -s ci/P479-original-KernelSU.Kbuild
           BASELINE="$(git rev-list -n 1 p479-baseline)"
           if [ "$BASELINE" = "$GITHUB_SHA" ]; then
+            # The initial single-commit baseline uses the authentic P479
+            # ReSukiSU version, not nested KernelSU Git metadata.
+            python3 ci/p479_kernelsu_direct.py --root . --mode verify
+            grep -Fq 'KSU_COMMIT_SHA := 239e1e88-dirty' KernelSU/kernel/Kbuild
             printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 ci/P479-kheaders.tar.xz | sha256sum -c -
             echo MANGROVE_P479_PIN_IKHEADERS=1 >> "$GITHUB_ENV"
             # Reproduce P479's original compiled UTS fields, not the current
@@ -93,6 +99,9 @@ jobs:
           fi
           grep -Fxq 'CONFIG_P479_H4=y' out/.config
           grep -Fxq 'CONFIG_SECURITY_SELINUX=y' out/.config
+          if [ "$MANGROVE_P479_PIN_IKHEADERS" = 1 ]; then
+            grep -aFq 'v4.2.0-rc3-239e1e88-dirty@ReSukiSU' out/arch/arm64/boot/Image
+          fi
           grep -aFq 'P479 H4 CABLE type=' out/arch/arm64/boot/Image
           grep -Eq '[[:space:]]p479_h4_tick([.][^[:space:]]+)?$' out/System.map
           echo 'Direct-source build PASS. Artifact is diagnostic only; NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
