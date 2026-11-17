@@ -41,7 +41,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           test -n "$SOURCE_PUSH_TOKEN" || {
-            echo '::error::Set SOURCE_REPO_PAT in repo Actions secrets, scoped to creating/pushing the source repo; no repo created'
+            echo '::error::SOURCE_REPO_PAT missing. Create an EMPTY GiulianoB-1/A526B-Mangrove-Source repository and supply a fine-grained PAT with Contents:write and Workflows:write for that repo, or use a short-lived classic PAT with repo+workflow scopes for repo creation. No repo created.'
             exit 1
           }
           export P479_SOURCE_ROOT="$PWD/p479-source-root"
