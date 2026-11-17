@@ -17,6 +17,18 @@ jobs:
           bash -n scripts/recover_phase446wx_or_446s.sh
           bash -n migration/create_p479_source_baseline.sh
           python3 -m py_compile scripts/p479_equivalence_gate.py
+          python3 -m py_compile migration/p479_kernelsu_direct.py
+          python3 - <<'PY_KSU'
+          import sys
+          sys.path.insert(0,'migration')
+          import p479_kernelsu_direct as m
+          assert m.ORIGINAL_P479_KSU_VERSION == 35171
+          assert m.ORIGINAL_P479_KSU_FULL == 'v4.2.0-rc3-239e1e88-dirty@ReSukiSU'
+          assert 'LOCAL_GIT_EXISTS' not in m.REPLACEMENT
+          assert 'KSU_LOCAL_VERSION := 4471' in m.REPLACEMENT
+          assert 'KSU_COMMIT_SHA := 239e1e88-dirty' in m.REPLACEMENT
+          print('KernelSU direct-source adaptation static safety PASS')
+          PY_KSU
           python3 -m pip install --quiet --user PyYAML
           python3 - <<'PY'
           from pathlib import Path
