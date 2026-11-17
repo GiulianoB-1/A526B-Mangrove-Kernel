@@ -1,5 +1,10 @@
 name: Migrate equivalence-proven P479 into direct-source Git repo (NO FLASH)
 on:
+  # Manual dispatch may require this workflow on the default branch. The
+  # explicit push marker works safely on the isolated migration branch.
+  push:
+    branches:
+      - agent/p479-source-migration-prep
   workflow_dispatch:
 
 permissions:
@@ -7,6 +12,10 @@ permissions:
 
 jobs:
   verified-source-cutover:
+    # Never create a remote repository during ordinary source/migration pushes.
+    # User must explicitly request the one-time cutover by committing the exact
+    # [P479-CUTOVER] marker, after configuring a permitted secret.
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[P479-CUTOVER]') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
