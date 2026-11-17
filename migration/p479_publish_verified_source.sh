@@ -73,6 +73,18 @@ done
 if grep -Eq '(^|/)\.git(/|$)' filelist.txt; then
   echo "::error::Nested .git in source backup"; exit 1;
 fi
+# GitHub's release API protects commits that modify .github/workflows
+# relative to the default branch. GITHUB_TOKEN cannot have Workflows:write,
+# so a release tag targeting the SOURCE producer SHA gets HTTP 403. Anchor
+# only the release TAG to the current default HEAD, while cryptographically
+# and explicitly pinning the actual P479 source producer SHA and all assets.
+DEFAULT_BRANCH="$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+test "$DEFAULT_BRANCH" = main || {
+  echo "::error::Unexpected default release anchor: $DEFAULT_BRANCH"; exit 1;
+}
+DEFAULT_SHA="$(gh api "repos/$GITHUB_REPOSITORY/branches/$DEFAULT_BRANCH" --jq .commit.sha)"
+printf 'Release tag will point to default branch %s %s; exact P479 source producer remains %s\n' \
+  "$DEFAULT_BRANCH" "$DEFAULT_SHA" "$EXPECTED_BUILD_SHA"
 if gh release view p479-verified-source-baseline --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   echo "::error::Release already exists; refuse overwrite"; exit 1;
 fi
@@ -80,6 +92,10 @@ cat > README.txt <<'NOTES'
 P479 equivalent complete kernel source (with KernelSU), produced by a
 compiled and strict-gated restoration of Phase446WX.
 Source run 44038773282; reference P479 run 43638159300.
+The GitHub RELEASE TAG points at the repository main branch HEAD for GitHub
+Actions release permissions only. It is NOT the P479 source snapshot. The exact
+P479 source producer commit is 5e6fb4713022f22b417a9e6581cf3c5d9c2b16f5,
+with all source and binary evidence pinned in the SHA256-verified release assets.
 
 Strict equivalence: exact config, exact System.map symbols and addresses,
 identical allocated ELF section sizes, and compiled safety markers.
@@ -89,7 +105,7 @@ Proof JSON preserves both hashes. NO FLASH or P480 authorization.
 Original legacy releases and archives are preserved.
 NOTES
 gh release create p479-verified-source-baseline \
-  --repo "$GITHUB_REPOSITORY" --target "$EXPECTED_BUILD_SHA" \
+  --repo "$GITHUB_REPOSITORY" --target "$DEFAULT_SHA" \
   --title "P479 strict equivalence, complete verified source (NO FLASH)" \
   --notes-file README.txt --latest=false \
   P479-verified-full-source.tar.zst P479.config \
