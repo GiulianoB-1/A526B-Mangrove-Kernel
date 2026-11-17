@@ -36,6 +36,12 @@ for item in P479-verified-full-source.tar.zst P479.config \
   test -s "$item" || { echo "::error::Missing P479 source file: $item"; exit 1; }
 done
 sha256sum -c SHA256SUMS
+# The entire source snapshot is tied to this exact validated producer.
+# Pin the archived source itself, not only the four-file manifest.
+printf '%s  %s\n' 43ecd5698f319328290721c4f79d1dddfe7e8acb30f4ba1c3a47629f2115d9e3 \
+  P479-verified-full-source.tar.zst | sha256sum -c -
+printf '%s  %s\n' 1c55825c138aafa87808cc7cfab6effdce8b6e063b39fb9a8de86db90bf6ee55 \
+  P479-equivalence-proof.json | sha256sum -c -
 python3 - <<'PY'
 from pathlib import Path
 import json,hashlib
@@ -55,9 +61,10 @@ for key,value in checks.items():
 assert checks["config_exact"]["details"]["built_sha256"]=="62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b"
 assert checks["system_map_symbols_and_addresses_exact"]["details"]["built_sha256"]=="26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e"
 assert hashlib.sha256(Path("P479.config").read_bytes()).hexdigest()=="62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b"
-assert p["built_image"]["sha256"]=="2b094dc42cd6079ab5dd2092a69a68b2ae6a3676ffe8da7215db84f78a8c1070"
+assert p["built_image"]["sha256"]=="04bec126c1ae6d06e4ac43f417d1a7dfd22fa82638f995d41721f27a056a1bc7", "Only authenticated run 44038773282 built Image accepted"
 assert p["original_image_sha256"]=="c1e29a64f611f402cdc8e5db1f42fea5b6ec9f48b19df60d5b9aa6da2d8585ae"
 assert p["image_hash_identical"] is False, "Never claim byte-identical Image"
+assert p["built_image"]["sha256"] != p["original_image_sha256"], "Original and rebuilt Image must not be mislabeled identical"
 m=json.loads(Path("P479-final-tree-manifest.json").read_text())
 assert m["strict"] is True and not m["missing_required"]
 print("P479 release proof PASS; raw Image is NOT byte-identical")
