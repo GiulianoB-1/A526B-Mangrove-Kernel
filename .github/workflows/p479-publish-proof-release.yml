@@ -71,7 +71,20 @@ jobs:
           source-producing commit is pinned above and inside the evidence.
           NOTES
           if gh release view p479-equivalence-evidence-44026270014 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo '::error::Evidence release already exists; no overwrite'; exit 1
+            # Idempotent evidence publication. Do not overwrite a permanent
+            # release; require its assets to be EXACTLY the authenticated proof.
+            mkdir -p existing-evidence
+            gh release download p479-equivalence-evidence-44026270014 \
+              --repo "$GITHUB_REPOSITORY" --dir existing-evidence \
+              --pattern P479-WX-EQUIVALENCE-PROOF.json \
+              --pattern P479-IKHEADERS-PROVENANCE.json \
+              --pattern SHA256SUMS
+            (cd existing-evidence && sha256sum -c SHA256SUMS)
+            cmp -s existing-evidence/P479-WX-EQUIVALENCE-PROOF.json P479-WX-EQUIVALENCE-PROOF.json
+            cmp -s existing-evidence/P479-IKHEADERS-PROVENANCE.json P479-IKHEADERS-PROVENANCE.json
+            cmp -s existing-evidence/SHA256SUMS SHA256SUMS
+            echo 'P479 evidence release already exists, hashes and exact proof reverified, no overwrite.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           gh release create p479-equivalence-evidence-44026270014 \
             --repo "$GITHUB_REPOSITORY" --target "$DEFAULT_SHA" \
