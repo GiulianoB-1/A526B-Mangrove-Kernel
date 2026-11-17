@@ -1,0 +1,81 @@
+name: Publish immutable P479 equivalence evidence (NO REBUILD, NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-proof-release-publisher
+permissions:
+  contents: write
+  actions: read
+jobs:
+  permanent-evidence:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Download SHA-pinned successful strict gate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p proof
+          gh run download 44026270014 --repo "$GITHUB_REPOSITORY" \
+            --name P479-WX-EQUIVALENCE-PROOF-44026270014 --dir proof
+          gh run download 44026270014 --repo "$GITHUB_REPOSITORY" \
+            --name P479-IKHEADERS-SEMANTIC-PROOF-44026270014 --dir proof
+          test -s proof/P479-WX-EQUIVALENCE-PROOF.json
+          test -s proof/P479-IKHEADERS-PROVENANCE.json
+      - name: Independently validate proof and create permanent evidence release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          d=json.loads(Path('proof/P479-WX-EQUIVALENCE-PROOF.json').read_text())
+          i=json.loads(Path('proof/P479-IKHEADERS-PROVENANCE.json').read_text())
+          assert d['status']=='PASS' and not d['errors']
+          assert d['baseline_run']==43638159300
+          assert d['baseline_sha']=='e2e9f3fad600489deb8fa0816245a87cef6b9b95'
+          for k in ('config_exact','system_map_symbols_and_addresses_exact',
+                    'image_allocated_elf_section_sizes_identical','native_h4_linked'):
+              assert d['checks'][k]['pass'],k
+          assert d['checks']['config_exact']['details']['built_sha256']=='62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b'
+          assert d['checks']['system_map_symbols_and_addresses_exact']['details']['built_sha256']=='26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e'
+          assert d['image_hash_identical'] is False
+          assert d['built_image']['sha256']=='2b094dc42cd6079ab5dd2092a69a68b2ae6a3676ffe8da7215db84f78a8c1070'
+          assert i['status']=='PASS' and not i['meaningful_content_changes']
+          assert i['reference_header_count']==7932
+          assert i['original_fingerprint_active_for_P479_binary_replay_only']
+          print('P479 original comparison PASS; raw Image remains different, no flash')
+          PY
+          cd proof
+          sha256sum P479-WX-EQUIVALENCE-PROOF.json P479-IKHEADERS-PROVENANCE.json > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          # GITHUB_TOKEN cannot create a tag at a commit whose workflows differ
+          # from the default branch. The TAG is only a release container;
+          # provenance is pinned by the proof assets, not this tag SHA.
+          test "$(gh api repos/"$GITHUB_REPOSITORY" --jq .default_branch)" = main
+          DEFAULT_SHA="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          cat > NOTES.md <<'NOTES'
+          Strict P479 source-restoration kernel equivalence proof from run 44026270014.
+          Source producer commit 5e5db938a24068ae5a804b003e5cbe16d7f31438.
+          Original P479 run 43638159300 at e2e9f3fad600489deb8fa0816245a87cef6b9b95.
+
+          PASS: exact config, System.map symbols/addresses, allocated ELF
+          section sizes, native H4/CDC safety markers, IKHEADERS content parity.
+          NOT byte-identical: rebuilt and original raw Image SHA256 differ.
+          Source release publication remains a separate task. NO FLASH.
+
+          NOTE: this release tag points to main HEAD ONLY to satisfy GitHub's
+          workflow-file tag creation restriction. The exact verified
+          source-producing commit is pinned above and inside the evidence.
+          NOTES
+          if gh release view p479-equivalence-evidence-44026270014 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo '::error::Evidence release already exists; no overwrite'; exit 1
+          fi
+          gh release create p479-equivalence-evidence-44026270014 \
+            --repo "$GITHUB_REPOSITORY" --target "$DEFAULT_SHA" \
+            --title 'P479 strict equivalence PASS, Image hash differs (NO FLASH)' \
+            --notes-file NOTES.md --latest=false \
+            P479-WX-EQUIVALENCE-PROOF.json P479-IKHEADERS-PROVENANCE.json SHA256SUMS
+          echo 'P479 equivalence evidence released permanently; NO FLASH' >> "$GITHUB_STEP_SUMMARY"
