@@ -1,0 +1,35 @@
+name: Publish verified P479 source from existing Actions archive (NO REBUILD, NO FLASH)
+run-name: P479 sha-pinned equivalent source release, no recompile and no flash
+on:
+  push:
+    branches:
+      - agent/p479-source-publisher
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish-existing-source:
+    name: Authenticated P479 fallback -> permanent GitHub Release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install only source archive extraction dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+      - name: Publish proven full source archive only, fail closed on 403
+        env:
+          # For repos where GitHub Actions integration cannot create releases,
+          # add P479_RELEASE_PAT with Contents:RW and Actions:Read.
+          # The normal GITHUB_TOKEN is used if no explicit credential exists.
+          GH_TOKEN: ${{ secrets.P479_RELEASE_PAT || github.token }}
+        run: |
+          set -Eeuo pipefail
+          bash -n migration/p479_publish_verified_source.sh
+          bash migration/p479_publish_verified_source.sh
+          echo 'P479 verified source published. Raw Image SHA differs, NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
