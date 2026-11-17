@@ -49,6 +49,7 @@ on:
       - agent/p479-wx-equivalence-no-flash
       - agent/p479-wx-equivalence-v2-no-flash
       - agent/p479-wx-ikheaders-proof
+      - agent/p479-wx-compile-provenance-proof
   workflow_dispatch:
     inputs:
       restore_mode:
@@ -2291,12 +2292,25 @@ jobs:
             --reference-map "$REFERENCE/P479-reference.System.map" \
             --reference-config "$REFERENCE/P479-reference.config" \
             --report phase447-inventory/P479-IKHEADERS-PROVENANCE.json
-          # The final native Image was compiled above with runner-generated
-          # headers. Rebuild only AFTER full content parity. Do not fake a map.
-          rm -f "$BUILD/kernel/kheaders.o"
-          MANGROVE_P479_PIN_IKHEADERS=1 make -C "$ROOT" O="$BUILD" ARCH=arm64 \
+          # Original P479 compile.h is SHA-pinned from its authenticated
+          # vmlinux IKHEADERS, after all native headers passed semantic parity.
+          # Its UTS build stamp, username and CI hostname are Kbuild inputs.
+          printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 \
+            "$ROOT/ci/P479-compile.h" | sha256sum -c -
+          # Force compilation of the binary which actually embeds compile.h.
+          # Do not fake or directly rewrite System.map/vmlinux.
+          rm -f "$BUILD/kernel/kheaders.o" "$BUILD/init/version.o"
+          MANGROVE_P479_PIN_IKHEADERS=1 \
+          KBUILD_BUILD_VERSION=3 KBUILD_BUILD_USER=runner \
+          KBUILD_BUILD_HOST=runnervmy75tu \
+          KBUILD_BUILD_TIMESTAMP='Sat Nov 14 20:43:30 UTC 2026' \
+          TZ=UTC make -C "$ROOT" O="$BUILD" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image
+          # Verify native mkcompile_h really used the exact archived values.
+          # No source code or safety gate is rewritten to force a false pass.
+          cmp "$ROOT/ci/P479-compile.h" "$BUILD/include/generated/compile.h"
+          echo 'P479 original compile.h: sha256 and actual generated Kbuild header byte-for-byte PASS' >> "$GITHUB_STEP_SUMMARY"
           printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 \
             "$BUILD/kernel/kheaders_data.tar.xz" | sha256sum -c -
           test -s "$BUILD/System.map" && test -s "$BUILD/vmlinux"
