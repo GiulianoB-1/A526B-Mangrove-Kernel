@@ -66,6 +66,16 @@ test ! -s "$STAGING.source-compare.txt" || {
 }
 test ! -e "$STAGING/KernelSU/.git"
 mkdir -p "$STAGING/ci" "$STAGING/.github/workflows"
+# ReSukiSU's archived Kbuild explicitly crashes without its own .git.
+# Since the requested repo contains one ordinary full-source commit, preserve
+# the archived Kbuild as evidence and make its historical version constants
+# explicit in a direct source Kbuild. All other source stays unchanged.
+python3 migration/p479_kernelsu_direct.py --root "$STAGING" --mode stage \
+  --report "$STAGING/ci/P479-KernelSU-direct-source.json"
+cp migration/p479_kernelsu_direct.py "$STAGING/ci/p479_kernelsu_direct.py"
+python3 "$STAGING/ci/p479_kernelsu_direct.py" --root "$STAGING" --mode verify
+! grep -Fq 'LOCAL_GIT_EXISTS' "$STAGING/KernelSU/kernel/Kbuild"
+test -s "$STAGING/ci/P479-original-KernelSU.Kbuild"
 cp "$CONFIG" "$STAGING/ci/P479.config"
 cp "$CONFIG" "$STAGING/ci/build.config"
 cp "$MANIFEST" "$STAGING/ci/P479-final-tree-manifest.json"
@@ -103,6 +113,14 @@ Evidence: ci/P479-equivalence-proof.json, with exact .config, System.map
 symbols/addresses and allocated ELF section sizes plus compiled feature markers.
 Source archive: legacy release phase446wx-source-backup.
 Reference binaries: legacy release p479-equivalence-reference.
+
+The archived ReSukiSU/KernelSU Kbuild originally required a separate nested
+.git submodule and computed version 35171 from 4471 commits. Its exact original
+Kbuild is preserved in ci/P479-original-KernelSU.Kbuild (SHA256 pinned).
+The direct-source adaptation removes that prerequisite and retains the exact
+compiled historical full version v4.2.0-rc3-239e1e88-dirty@ReSukiSU.
+The adaptation report is ci/P479-KernelSU-direct-source.json. Future KernelSU
+version changes require ordinary direct Git source commits, not .git submodules.
 
 P479 generated build provenance is deliberately fixed using ci/P479-compile.h,
 ci/P479-historical-manifest.h, and ci/P479-kheaders.tar.xz. The distinct real
