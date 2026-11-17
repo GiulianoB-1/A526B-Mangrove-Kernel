@@ -6,7 +6,13 @@ set -Eeuo pipefail
 : "${P479_CONFIG:?final P479 .config required}"
 : "${P479_FINAL_TREE_MANIFEST:?P479 final-tree.json required}"
 : "${P479_EQUIVALENCE_REPORT:?successful proof JSON required}"
-: "${SOURCE_PUSH_TOKEN:?token with repo create/push permissions required}"
+# Dry-run mode validates the full source commit locally and cannot create
+# or push a repository. Only mode 0 may consume SOURCE_PUSH_TOKEN.
+P479_MIGRATION_DRY_RUN="${P479_MIGRATION_DRY_RUN:-0}"
+case "$P479_MIGRATION_DRY_RUN" in 0|1) ;; *) echo "::error::Unknown migration mode"; exit 1;; esac
+if [ "$P479_MIGRATION_DRY_RUN" = 0 ]; then
+  : "${SOURCE_PUSH_TOKEN:?token with repo create/push permissions required}"
+fi
 TARGET="GiulianoB-1/A526B-Mangrove-Source"
 SOURCE="$(realpath "$P479_SOURCE_ROOT")"
 CONFIG="$(realpath "$P479_CONFIG")"
@@ -121,10 +127,17 @@ Original P479 proof run: 44026270014 (source producer commit
 IMPORTANT: strict equivalence proves exact .config, System.map symbol/addresses,
 allocated ELF section sizes and required kernel Image markers, but the original
 and rebuilt raw Image SHA256 differ. Original c1e29a64f611f402cdc8e5db1f42fea5b6ec9f48b19df60d5b9aa6da2d8585ae;
-rebuilt 2b094dc42cd6079ab5dd2092a69a68b2ae6a3676ffe8da7215db84f78a8c1070.
+rebuilt 04bec126c1ae6d06e4ac43f417d1a7dfd22fa82638f995d41721f27a056a1bc7
+from the authenticated full-source producer run 44038773282. The previous
+strict-PASS build 44026270014 had a different rebuilt Image SHA256
+2b094dc42cd6079ab5dd2092a69a68b2ae6a3676ffe8da7215db84f78a8c1070.
 Do NOT report byte-for-byte Image identity, or infer flash authorization.
 The verified source release tag points at main HEAD solely for GitHub workflow
 file permissions; the actual source archive and proof identify its producer.
+Verified source release producer: 44038773282, commit
+5e6fb4713022f22b417a9e6581cf3c5d9c2b16f5.
+Full source archive SHA256:
+43ecd5698f319328290721c4f79d1dddfe7e8acb30f4ba1c3a47629f2115d9e3.
 
 
 The archived ReSukiSU/KernelSU Kbuild originally required a separate nested
@@ -148,11 +161,15 @@ baseline. The active ci/build.config + ci/build-manifest.json may change in
 future direct source commits, starting with P480 A3c.
 NO FLASHING without separate authorization.
 NOTES
-export GH_TOKEN="$SOURCE_PUSH_TOKEN"
-if ! gh repo view "$TARGET" --json name >/dev/null 2>&1; then
-  gh repo create "$TARGET" --public
+if [ "$P479_MIGRATION_DRY_RUN" = 1 ]; then
+  echo 'P479 dry run: no external repo creation, no credential and no push.'
+else
+  export GH_TOKEN="$SOURCE_PUSH_TOKEN"
+  if ! gh repo view "$TARGET" --json name >/dev/null 2>&1; then
+    gh repo create "$TARGET" --public
+  fi
+  gh auth setup-git
 fi
-gh auth setup-git
 cd "$STAGING"
 git init -b main
 git config user.name "Mangrove Source Baseline CI"
@@ -191,6 +208,16 @@ PY
 if git diff --cached --quiet; then echo "error: empty source commit"; exit 1; fi
 git commit -m "baseline(P479): complete equivalent kernel tree, direct-source builds"
 git tag -a p479-baseline -m "Proven P479 source equivalent to run 43638159300 (NO FLASH)"
+test "$(git rev-list --count HEAD)" -eq 1 || { echo '::error::Expected exactly one P479 baseline commit'; exit 1; }
+test "$(git rev-parse p479-baseline^{commit})" = "$(git rev-parse HEAD)" || {
+  echo '::error::Baseline tag not at the initial commit'; exit 1;
+}
+if [ "$P479_MIGRATION_DRY_RUN" = 1 ]; then
+  printf 'P479 source-only cutover dry-run PASS, commit %s tracked files %s\n' \
+    "$(git rev-parse HEAD)" "$(git ls-files | wc -l)"
+  printf 'No new remote repo created. No source pushed. NO FLASH.\n'
+  exit 0
+fi
 git remote add origin "https://github.com/$TARGET.git"
 if [ -n "$(git ls-remote --heads --tags origin)" ]; then
   echo "error: destination has refs, refusing to overwrite"; exit 1
