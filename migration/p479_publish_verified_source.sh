@@ -86,7 +86,20 @@ DEFAULT_SHA="$(gh api "repos/$GITHUB_REPOSITORY/branches/$DEFAULT_BRANCH" --jq .
 printf 'Release tag will point to default branch %s %s; exact P479 source producer remains %s\n' \
   "$DEFAULT_BRANCH" "$DEFAULT_SHA" "$EXPECTED_BUILD_SHA"
 if gh release view p479-verified-source-baseline --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-  echo "::error::Release already exists; refuse overwrite"; exit 1;
+  # Treat duplicate publication as success only if the immutable release
+  # already contains byte-for-byte the exact proven archive and all evidence.
+  mkdir -p previous
+  gh release download p479-verified-source-baseline --repo "$GITHUB_REPOSITORY" \
+    --dir previous --pattern 'P479*' --pattern SHA256SUMS
+  (cd previous && sha256sum -c SHA256SUMS)
+  for item in P479-verified-full-source.tar.zst P479.config \
+              P479-equivalence-proof.json P479-final-tree-manifest.json SHA256SUMS; do
+    cmp "previous/$item" "$item" || {
+      echo "::error::Existing permanent P479 release differs; no overwrite"; exit 1;
+    }
+  done
+  echo "P479 permanent source release already exists with identical audited assets, no overwrite"
+  exit 0
 fi
 cat > README.txt <<'NOTES'
 P479 equivalent complete kernel source (with KernelSU), produced by a
