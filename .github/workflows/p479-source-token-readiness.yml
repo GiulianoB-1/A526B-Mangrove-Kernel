@@ -35,3 +35,34 @@ jobs:
             echo "P479 token readiness: SOURCE_REPO_PAT authentication failed; NO CHANGE"
           fi
           echo 'No secrets were printed, no pushes, no repo creation, NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
+          # Test REST auth/scope without printing a token or making changes.
+          # POST is deliberately missing required \`sha\`, so it cannot create a ref.
+          user_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            'https://api.github.com/user')"
+          source_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$TARGET")"
+          no_write_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' \
+            --data '{"ref":"refs/heads/p479-scope-probe-without-sha"}' \
+            "https://api.github.com/repos/$TARGET/git/refs")"
+          printf 'P479 PAT read-only diagnosis: user HTTP %s, repository HTTP %s, deliberately invalid ref-write HTTP %s\n' \
+            "$user_code" "$source_code" "$no_write_code"
+          {
+            echo "PAT /user API status: $user_code (200 = authentic)"
+            echo "PAT destination visibility: $source_code (200 = visible)"
+            echo "PAT write permission validation: $no_write_code (422 = request accepted then rejected for missing required SHA)"
+            echo "No Git refs could be created because the request contained no SHA. NO PUSH. NO FLASH."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$user_code" = 200 ] && [ "$source_code" = 200 ] && [ "$no_write_code" = 422 ]; then
+            echo 'P479 PAT credential and repository write-scope: READINESS PASS'
+          else
+            echo 'P479 PAT credential and/or repository write-scope: READINESS BLOCKED'
+          fi
+
