@@ -1,0 +1,38 @@
+name: P479 dual-provenance source audit smoke (NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-full-provenance-smoke
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate historical metadata and fail-closed source audit syntax
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/p479_ikheaders_pin.py scripts/p479_equivalence_gate.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys,re,hashlib
+          sys.path.insert(0,"scripts")
+          import p479_ikheaders_pin as m
+          assert m.EXPECTED_REF_IKHEADERS == "4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976"
+          assert m.EXPECTED_REF_COMPILE == "c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
+          assert m.EXPECTED_REF_MANIFEST == "30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3bde3906"
+          # Both historical and WX fingerprints are fixed 64-character digests.
+          def manifest(fingerprint):
+              return ('#define A52_446S_FINGERPRINT "'+fingerprint+'"\n').encode()
+          old=manifest("a3c2e023da31ef40bbc92c83283acd2d399a51972ccdcd3c87f88477120a4d29")
+          wx=manifest("fb330e2da844e7b8b8b3043f7de3fdad5c6c2f9c3caae7c58ce6ad10a47eca8e")
+          assert hashlib.sha256(old).hexdigest()==m.EXPECTED_REF_MANIFEST
+          assert len(old)==len(wx) and old!=wx
+          assert m.harmless_volatile("./include/generated/a52_446s_manifest.h",old,wx)
+          assert not m.harmless_volatile("./include/generated/a52_446s_manifest.h",
+              old,b'#define A52_446S_FINGERPRINT "bad"\n')
+          assert re.fullmatch(rb'\s*#define A52_446S_FINGERPRINT "[0-9a-f]{64}"\s*',wx)
+          print("P479 65-byte fingerprint historical/native distinction PASS")
+          PY
