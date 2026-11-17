@@ -2318,7 +2318,20 @@ jobs:
             LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image
           # Verify native mkcompile_h really used the exact archived values.
           # No source code or safety gate is rewritten to force a false pass.
-          cmp "$ROOT/ci/P479-compile.h" "$BUILD/include/generated/compile.h"
+          # gen_kheaders.sh strips non-SPDX C block comments from the
+          # embedded header. The *live* generated header retains its comments.
+          # Compare after precisely the generator's comment normalization.
+          python3 - "$ROOT/ci/P479-compile.h" "$BUILD/include/generated/compile.h" <<'PY'
+          from pathlib import Path
+          import hashlib, re, sys
+          archive_header, live_header = (Path(x).read_bytes() for x in sys.argv[1:])
+          assert b"/* This file is auto generated, version 3 */" in live_header
+          assert b"/* SMP PREEMPT */" in live_header
+          normalized = re.sub(rb"/\*((?!SPDX).)*?\*/", b"", live_header, flags=re.S)
+          assert normalized == archive_header, "P479 generated compile.h fields differ from authenticated original"
+          assert hashlib.sha256(normalized).hexdigest() == "c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
+          print("P479 live compile.h fields identical to the original after kernel comment-stripping normalization")
+          PY
           # Expect the actual linked GKI Image, not a source-only header,
           # to embed exactly the original P479 fingerprint.
           grep -aFq 'a3c2e023da31ef40bbc92c83283acd2d399a51972ccdcd3c87f88477120a4d29' \
