@@ -51,6 +51,7 @@ on:
       - agent/p479-wx-ikheaders-proof
       - agent/p479-wx-compile-provenance-proof
       - agent/p479-wx-full-provenance-proof
+      - agent/p479-wx-archive-fallback-no-flash
   workflow_dispatch:
     inputs:
       restore_mode:
@@ -2372,10 +2373,30 @@ jobs:
           echo 'P479 SHA-pinned WX equivalent to run 43638159300: config, map, ELF alloc sections, all native H4/CDC markers PASS. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
       - name: Archive complete equivalent P479 source permanently (only after proof PASS)
         if: success() && matrix.variant.id == 'G'
+        env:
+          # A dedicated fine-grained token with releases write may be set if
+          # GitHub's default integration token cannot create a release.
+          # Never log either credential; fall back to GITHUB_TOKEN otherwise.
+          GH_TOKEN: ${{ secrets.P479_RELEASE_PAT || github.token }}
         run: |
           set -Eeuo pipefail
           bash -n scripts/p479_export_verified_full_source.sh
           bash scripts/p479_export_verified_full_source.sh
+      - name: Back up SHA-verified complete P479 source as Actions artifact even if release API denies 403 (NO FLASH)
+        if: always() && matrix.variant.id == 'G'
+        uses: actions/upload-artifact@v4
+        with:
+          name: P479-VERIFIED-FULL-SOURCE-FALLBACK-${{ github.run_id }}
+          path: |
+            p479-verified-source-release/P479-verified-full-source.tar.zst
+            p479-verified-source-release/P479.config
+            p479-verified-source-release/P479-equivalence-proof.json
+            p479-verified-source-release/P479-final-tree-manifest.json
+            p479-verified-source-release/SHA256SUMS
+            p479-verified-source-release/README.txt
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 90
       - name: Publish P479 equivalence evidence (NOT a flash authorization)
         if: always() && matrix.variant.id == 'G'
         uses: actions/upload-artifact@v4
