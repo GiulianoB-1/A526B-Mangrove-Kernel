@@ -24,6 +24,7 @@ EXPECTED_REF_IKHEADERS = "4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b
 EXPECTED_REF_MAP = "26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e"
 EXPECTED_REF_CONFIG = "62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b"
 EXPECTED_REF_COMPILE = "c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
+EXPECTED_REF_MANIFEST = "30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3b8de3906"
 SCRIPT_MARKER = "# MANGROVE_P479_PIN_IKHEADERS_V1"
 ALLOWED_GENERATED = {
     "./include/generated/compile.h",
@@ -158,6 +159,10 @@ def main() -> None:
         "approved_generated_provenance_changes": allowed,
         "reference_compile_header_sha256": sha(original_volatile["./include/generated/compile.h"]),
         "native_compile_header_sha256": sha(generated_volatile["./include/generated/compile.h"]),
+        "original_source_fingerprint": original_volatile["./include/generated/a52_446s_manifest.h"].decode().split('"')[1],
+        "rebuilt_source_fingerprint": generated_volatile["./include/generated/a52_446s_manifest.h"].decode().split('"')[1],
+        "original_manifest_header_sha256": sha(original_volatile["./include/generated/a52_446s_manifest.h"]),
+        "rebuilt_manifest_header_sha256": sha(generated_volatile["./include/generated/a52_446s_manifest.h"]),
         "archive_metadata_differences_allowed": True,
         "source_pinning_permitted": not (only_old or only_new or meaningful),
         "flash_authorized": False,
@@ -194,6 +199,35 @@ def main() -> None:
     source_compile = root / "ci/P479-compile.h"
     assert not source_compile.exists(), "P479 compiler provenance already staged"
     source_compile.write_bytes(compile_header)
+    # The pinned WX snapshot carries a different *generated* fingerprint from
+    # original P479. Preserve both values in proof. For the one-time byte-exact
+    # historical P479 link only, reproduce the original generated header.
+    # This does NOT claim that the WX source's own fingerprint changed.
+    historical_manifest = original_volatile["./include/generated/a52_446s_manifest.h"]
+    assert sha(historical_manifest) == EXPECTED_REF_MANIFEST, "historical P479 manifest SHA drift"
+    src_manifest = root / "include/generated/a52_446s_manifest.h"
+    native_manifest = src_manifest.read_bytes()
+    assert re.fullmatch(
+        rb'\s*#define A52_446S_FINGERPRINT "[0-9a-f]{64}"\s*',
+        native_manifest,
+    ), "WX generated fingerprint header has unexpected syntax"
+    generated_manifest = generated_volatile["./include/generated/a52_446s_manifest.h"]
+    build_manifest = args.build / "include/generated/a52_446s_manifest.h"
+    if native_manifest != generated_manifest and (
+            not build_manifest.exists() or build_manifest.read_bytes() != generated_manifest):
+        raise RuntimeError("native compiled provenance not represented by either generated header")
+    witness = root / "ci/P479-native-WX-manifest.h"
+    witness.write_bytes(native_manifest)
+    historical = root / "ci/P479-historical-manifest.h"
+    historical.write_bytes(historical_manifest)
+    src_manifest.write_bytes(historical_manifest)
+    if build_manifest.exists():
+        build_manifest.write_bytes(historical_manifest)
+    # Keep the diagnostic artifact explicit about distinct historical and WX IDs.
+    evidence["source_manifest_historical_pin_applied"] = True
+    evidence["native_source_manifest_sha256"] = sha(native_manifest)
+    evidence["original_fingerprint_active_for_P479_binary_replay_only"] = True
+    report.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     install_opt_in_generator(root)
     assert file_sha(seed) == EXPECTED_REF_IKHEADERS
     print("P479 generated IKHEADERS provenance-only drift verified; pinned ORIGINAL tar in source, strict binary rebuild permitted (NO FLASH)")
