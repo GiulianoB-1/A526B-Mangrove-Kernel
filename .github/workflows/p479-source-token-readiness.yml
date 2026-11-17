@@ -1,0 +1,37 @@
+name: P479 source repository token readiness (READ ONLY, NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-source-token-readiness-no-flash
+permissions:
+  contents: read
+jobs:
+  readiness:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Check token presence and auth without exposing credentials
+        env:
+          SOURCE_PUSH_TOKEN: ${{ secrets.SOURCE_REPO_PAT }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          TARGET=GiulianoB-1/A526B-Mangrove-Source
+          if gh repo view "$TARGET" --json name >/dev/null 2>&1; then
+            echo 'Destination: repository already exists; must be EMPTY (no heads/tags)' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Destination: not yet available to the standard GitHub App token' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -z "$SOURCE_PUSH_TOKEN" ]; then
+            echo 'SOURCE_REPO_PAT: MISSING. Native repository creation requires a user-provided credential. NO ACTION TAKEN.' >> "$GITHUB_STEP_SUMMARY"
+            echo "P479 token readiness: SOURCE_REPO_PAT absent; no repo created"
+            exit 0
+          fi
+          if GH_TOKEN="$SOURCE_PUSH_TOKEN" gh api /user --jq .login >/dev/null 2>&1; then
+            echo 'SOURCE_REPO_PAT: PRESENT and basic GitHub authentication succeeded.' >> "$GITHUB_STEP_SUMMARY"
+            echo "P479 token readiness: SOURCE_REPO_PAT present and authenticated; NO CHANGE"
+          else
+            echo 'SOURCE_REPO_PAT: PRESENT but invalid/insufficient for GitHub user API. No repo created.' >> "$GITHUB_STEP_SUMMARY"
+            echo "P479 token readiness: SOURCE_REPO_PAT authentication failed; NO CHANGE"
+          fi
+          echo 'No secrets were printed, no pushes, no repo creation, NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
