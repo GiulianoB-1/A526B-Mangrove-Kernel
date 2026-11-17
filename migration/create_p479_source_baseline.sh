@@ -165,9 +165,16 @@ if [ "$P479_MIGRATION_DRY_RUN" = 1 ]; then
   echo 'P479 dry run: no external repo creation, no credential and no push.'
 else
   export GH_TOKEN="$SOURCE_PUSH_TOKEN"
-  if ! gh repo view "$TARGET" --json name >/dev/null 2>&1; then
-    gh repo create "$TARGET" --public
-  fi
+  # The user has precreated the exact empty destination. Never attempt to
+  # recreate it if the token is revoked, malformed or lacks visibility.
+  gh api /user --jq .login >/dev/null || {
+    echo '::error::SOURCE_REPO_PAT authentication failed. No repository mutated.'
+    exit 1
+  }
+  gh repo view "$TARGET" --json name --jq .name | grep -Fxq A526B-Mangrove-Source || {
+    echo '::error::SOURCE_REPO_PAT cannot access the exact precreated destination. No repository mutated.'
+    exit 1
+  }
   gh auth setup-git
 fi
 cd "$STAGING"
