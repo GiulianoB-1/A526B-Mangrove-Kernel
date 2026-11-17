@@ -23,6 +23,41 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Preflight SOURCE_REPO_PAT against the exact EMPTY destination (NO MUTATION)
+        env:
+          SOURCE_PUSH_TOKEN: ${{ secrets.SOURCE_REPO_PAT }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$SOURCE_PUSH_TOKEN" || {
+            echo '::error::SOURCE_REPO_PAT is missing. No changes made.'
+            exit 1
+          }
+          TOKEN_USER_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/user)"
+          TOKEN_REPO_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/GiulianoB-1/A526B-Mangrove-Source)"
+          if [ "$TOKEN_USER_CODE" != 200 ] || [ "$TOKEN_REPO_CODE" != 200 ]; then
+            printf '::error::SOURCE_REPO_PAT rejected: user HTTP %s, source repository HTTP %s. Regenerate token, no repository changed.\n' \
+              "$TOKEN_USER_CODE" "$TOKEN_REPO_CODE"
+            exit 1
+          fi
+          # This API request deliberately omits required commit SHA, so even a
+          # write-authorized token can NEVER create the test branch.
+          SCOPE_CODE="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $SOURCE_PUSH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'Content-Type: application/json' \
+            --data '{"ref":"refs/heads/p479-invalid-scope-probe-no-sha"}' \
+            https://api.github.com/repos/GiulianoB-1/A526B-Mangrove-Source/git/refs)"
+          case "$SCOPE_CODE" in
+            409|422) ;; 
+            *) echo "::error::SOURCE_REPO_PAT cannot write source refs (HTTP $SCOPE_CODE). No changes made."; exit 1 ;;
+          esac
+          echo 'SOURCE_REPO_PAT authenticated to exact target. No refs created by scope probe.'
       - name: Fetch permanent P479 source release, never an expiring artifact
         env:
           GH_TOKEN: ${{ github.token }}
