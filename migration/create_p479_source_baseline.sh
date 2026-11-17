@@ -14,6 +14,19 @@ MANIFEST="$(realpath "$P479_FINAL_TREE_MANIFEST")"
 PROOF="$(realpath "$P479_EQUIVALENCE_REPORT")"
 test -s "$SOURCE/Makefile"
 test -d "$SOURCE/KernelSU"
+# Provenance is explicit: the historical P479 generated header is used only
+# for binary replay, while the original WX source fingerprint is preserved.
+for rel in ci/P479-kheaders.tar.xz ci/P479-compile.h \
+           ci/P479-native-WX-manifest.h ci/P479-historical-manifest.h; do
+  test -s "$SOURCE/$rel" || { echo "missing proven source metadata: $rel"; exit 1; }
+done
+printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 "$SOURCE/ci/P479-kheaders.tar.xz" | sha256sum -c -
+printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 "$SOURCE/ci/P479-compile.h" | sha256sum -c -
+printf '%s  %s\n' 30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3b8de3906 "$SOURCE/ci/P479-historical-manifest.h" | sha256sum -c -
+cmp "$SOURCE/ci/P479-historical-manifest.h" "$SOURCE/include/generated/a52_446s_manifest.h"
+! cmp -s "$SOURCE/ci/P479-native-WX-manifest.h" "$SOURCE/ci/P479-historical-manifest.h" || {
+  echo "missing preserved WX historical fingerprint difference"; exit 1
+}
 python3 - "$CONFIG" "$MANIFEST" "$PROOF" <<'PY'
 import hashlib,json,sys
 from pathlib import Path
@@ -90,6 +103,11 @@ Evidence: ci/P479-equivalence-proof.json, with exact .config, System.map
 symbols/addresses and allocated ELF section sizes plus compiled feature markers.
 Source archive: legacy release phase446wx-source-backup.
 Reference binaries: legacy release p479-equivalence-reference.
+
+P479 generated build provenance is deliberately fixed using ci/P479-compile.h,
+ci/P479-historical-manifest.h, and ci/P479-kheaders.tar.xz. The distinct real
+Phase446WX fingerprint is separately preserved in ci/P479-native-WX-manifest.h.
+The two fingerprint values are not interchangeable and MUST remain documented.
 
 The entire kernel source, including KernelSU, is stored as one ordinary Git
 commit and tagged p479-baseline. Future changes such as P480 A3c must be direct
