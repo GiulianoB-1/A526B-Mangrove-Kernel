@@ -114,6 +114,19 @@ symbols/addresses and allocated ELF section sizes plus compiled feature markers.
 Source archive: legacy release phase446wx-source-backup.
 Reference binaries: legacy release p479-equivalence-reference.
 
+Permanent comparison proof: release p479-equivalence-evidence-44026270014.
+Original P479 proof run: 44026270014 (source producer commit
+5e5db938a24068ae5a804b003e5cbe16d7f31438).
+
+IMPORTANT: strict equivalence proves exact .config, System.map symbol/addresses,
+allocated ELF section sizes and required kernel Image markers, but the original
+and rebuilt raw Image SHA256 differ. Original c1e29a64f611f402cdc8e5db1f42fea5b6ec9f48b19df60d5b9aa6da2d8585ae;
+rebuilt 2b094dc42cd6079ab5dd2092a69a68b2ae6a3676ffe8da7215db84f78a8c1070.
+Do NOT report byte-for-byte Image identity, or infer flash authorization.
+The verified source release tag points at main HEAD solely for GitHub workflow
+file permissions; the actual source archive and proof identify its producer.
+
+
 The archived ReSukiSU/KernelSU Kbuild originally required a separate nested
 .git submodule and computed version 35171 from 4471 commits. Its exact original
 Kbuild is preserved in ci/P479-original-KernelSU.Kbuild (SHA256 pinned).
