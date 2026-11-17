@@ -37,6 +37,15 @@ jobs:
             --pattern 'P479*' --pattern SHA256SUMS \
             --dir p479-release
           (cd p479-release && sha256sum -c SHA256SUMS)
+          # The release and its checksum file are in the same trust domain:
+          # independently pin all four assets to the authenticated P479 run.
+          cat > "$RUNNER_TEMP/p479-immutable-shasums.txt" <<'SHAS'
+          43ecd5698f319328290721c4f79d1dddfe7e8acb30f4ba1c3a47629f2115d9e3  p479-release/P479-verified-full-source.tar.zst
+          62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b  p479-release/P479.config
+          1c55825c138aafa87808cc7cfab6effdce8b6e063b39fb9a8de86db90bf6ee55  p479-release/P479-equivalence-proof.json
+          ff3bae1093dcf5fca3f2c2fa516000de69f677f9fc673dd38b9da378ffd085d4  p479-release/P479-final-tree-manifest.json
+          SHAS
+          sha256sum -c "$RUNNER_TEMP/p479-immutable-shasums.txt"
           tar --use-compress-program=zstd \
             -xf p479-release/P479-verified-full-source.tar.zst \
             -C p479-source-root
