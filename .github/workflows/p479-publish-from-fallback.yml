@@ -12,7 +12,7 @@ jobs:
   publish-existing-source:
     name: Authenticated P479 fallback -> permanent GitHub Release
     runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,6 +22,37 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq zstd
+      - name: Await only the pinned P479 source-producer run and its verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          PRODUCER=44038773282
+          EXPECTED_SHA=5e6fb4713022f22b417a9e6581cf3c5d9c2b16f5
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER" --jq .head_sha)" = "$EXPECTED_SHA"
+          # This Actions job handles dependency synchronization itself.
+          # It cannot authorize publication unless the exact source-producing
+          # run completes and uploads the SHA-checked fallback artifact.
+          complete=0
+          for attempt in $(seq 1 240); do
+            state="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER" --jq .status)"
+            if [ "$state" = completed ]; then
+              complete=1
+              break
+            fi
+            sleep 15
+          done
+          test "$complete" -eq 1 || {
+            echo "::error::Pinned source-producing run did not complete within bounded gate"
+            exit 1
+          }
+          count="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER/artifacts?per_page=100" \
+            --jq '.artifacts | map(select(.name=="P479-VERIFIED-FULL-SOURCE-FALLBACK-44038773282" and .expired==false)) | length')"
+          test "$count" = 1 || {
+            echo "::error::Expected unique unexpired SHA-verified P479 full-source fallback artifact, got $count"
+            exit 1
+          }
+          echo 'Verified full-source fallback artifact exists; publisher performs independent SHA256 and proof checks next.'
       - name: Publish proven full source archive only, fail closed on 403
         env:
           # For repos where GitHub Actions integration cannot create releases,
