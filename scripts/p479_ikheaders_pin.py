@@ -23,6 +23,7 @@ from pathlib import Path
 EXPECTED_REF_IKHEADERS = "4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976"
 EXPECTED_REF_MAP = "26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e"
 EXPECTED_REF_CONFIG = "62e75568506c051408588d2eb77fa94fb8ada762fcff997739a5b595a742d50b"
+EXPECTED_REF_COMPILE = "c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846"
 SCRIPT_MARKER = "# MANGROVE_P479_PIN_IKHEADERS_V1"
 ALLOWED_GENERATED = {
     "./include/generated/compile.h",
@@ -155,6 +156,8 @@ def main() -> None:
         "additional_headers": only_new,
         "meaningful_content_changes": meaningful,
         "approved_generated_provenance_changes": allowed,
+        "reference_compile_header_sha256": sha(original_volatile["./include/generated/compile.h"]),
+        "native_compile_header_sha256": sha(generated_volatile["./include/generated/compile.h"]),
         "archive_metadata_differences_allowed": True,
         "source_pinning_permitted": not (only_old or only_new or meaningful),
         "flash_authorized": False,
@@ -173,6 +176,24 @@ def main() -> None:
     assert not seed.exists(), "source already contains P479 seed; refuse overwrite"
     seed.parent.mkdir(parents=True, exist_ok=True)
     seed.write_bytes(pinned)
+    # Source-verified generated compile.h is also a real kernel build input:
+    # different UTS_VERSION, user or runner hostname changes linked strings.
+    # Pin the exact reference provenance, not only the compressed IKHEADERS.
+    compile_header = original_volatile["./include/generated/compile.h"]
+    assert sha(compile_header) == EXPECTED_REF_COMPILE, "original compile.h SHA drift"
+    expected_fields = (
+        b'#define UTS_MACHINE "aarch64"',
+        b'#define UTS_VERSION "#3 SMP PREEMPT Sat Nov 14 20:43:30 UTC 2026"',
+        b'#define LINUX_COMPILE_BY "runner"',
+        b'#define LINUX_COMPILE_HOST "runnervmy75tu"',
+        b'#define LINUX_COMPILER "Ubuntu clang version 14.0.0-1ubuntu1.1, Ubuntu LLD 14.0.0"',
+    )
+    assert all(field in compile_header for field in expected_fields), (
+        "original P479 compile metadata differs from exact pinned values"
+    )
+    source_compile = root / "ci/P479-compile.h"
+    assert not source_compile.exists(), "P479 compiler provenance already staged"
+    source_compile.write_bytes(compile_header)
     install_opt_in_generator(root)
     assert file_sha(seed) == EXPECTED_REF_IKHEADERS
     print("P479 generated IKHEADERS provenance-only drift verified; pinned ORIGINAL tar in source, strict binary rebuild permitted (NO FLASH)")
