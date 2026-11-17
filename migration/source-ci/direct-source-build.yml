@@ -34,6 +34,14 @@ jobs:
           if [ "$BASELINE" = "$GITHUB_SHA" ]; then
             printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 ci/P479-kheaders.tar.xz | sha256sum -c -
             echo MANGROVE_P479_PIN_IKHEADERS=1 >> "$GITHUB_ENV"
+            # Reproduce P479's original compiled UTS fields, not the current
+            # GitHub runner's hostname or today's clock.
+            printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 ci/P479-compile.h | sha256sum -c -
+            echo KBUILD_BUILD_VERSION=3 >> "$GITHUB_ENV"
+            echo KBUILD_BUILD_USER=runner >> "$GITHUB_ENV"
+            echo KBUILD_BUILD_HOST=runnervmy75tu >> "$GITHUB_ENV"
+            echo 'KBUILD_BUILD_TIMESTAMP=Sat Nov 14 20:43:30 UTC 2026' >> "$GITHUB_ENV"
+            echo TZ=UTC >> "$GITHUB_ENV"
           else
             echo MANGROVE_P479_PIN_IKHEADERS=0 >> "$GITHUB_ENV"
           fi
@@ -68,6 +76,7 @@ jobs:
           test -s out/arch/arm64/boot/Image
           test -s out/System.map
           if [ "$MANGROVE_P479_PIN_IKHEADERS" = 1 ]; then
+            printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 out/include/generated/compile.h | sha256sum -c -
             printf '%s  %s\n' 26ae9bda166d764bf695d6c51b8799632bc6f1ea276747a9f8fd1d0caf6d3a3e out/System.map | sha256sum -c -
           fi
           grep -Fxq 'CONFIG_P479_H4=y' out/.config
