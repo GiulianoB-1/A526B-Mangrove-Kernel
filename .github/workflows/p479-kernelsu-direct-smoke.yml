@@ -1,0 +1,51 @@
+name: P479 authentic KernelSU single-repo Kbuild smoke (NO FLASH)
+on:
+  push:
+    branches:
+      - agent/p479-source-migration-prep
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  migrate-kernelsu:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test direct-source adapter against SHA-pinned actual Phase446WX KernelSU Kbuild
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+          mkdir -p smoke/kernel-source/KernelSU/kernel smoke/reference
+          gh release download phase446wx-source-backup --repo "$GITHUB_REPOSITORY" \
+            --pattern phase446wx-artifact-12271681215.zip --dir smoke/reference
+          printf '%s  %s\n' 4a67e19ed23935ea6596a76cfc5f28d434cd37b7061ab7bc520a7a0ce8137a6b \
+            smoke/reference/phase446wx-artifact-12271681215.zip | sha256sum -c -
+          unzip -p smoke/reference/phase446wx-artifact-12271681215.zip \
+            final-patched-gki-source.tar.zst | \
+            tar --zstd -xOf - ./KernelSU/kernel/Kbuild > smoke/kernel-source/KernelSU/kernel/Kbuild
+          printf '%s  %s\n' 08bbd04a5667f54db6ac4ca8bf7ccf4b90187971f0b7e392d667468596de3cf6 \
+            smoke/kernel-source/KernelSU/kernel/Kbuild | sha256sum -c -
+          python3 migration/p479_kernelsu_direct.py \
+            --root smoke/kernel-source --mode stage \
+            --report smoke/P479-KernelSU-direct-source.json
+          python3 migration/p479_kernelsu_direct.py \
+            --root smoke/kernel-source --mode verify
+          test ! -e smoke/kernel-source/KernelSU/.git
+          ! grep -Fq LOCAL_GIT_EXISTS smoke/kernel-source/KernelSU/kernel/Kbuild
+          grep -Fq 'KSU_LOCAL_VERSION := 4471' smoke/kernel-source/KernelSU/kernel/Kbuild
+          grep -Fq 'KSU_TAG_NAME := v4.2.0-rc3' smoke/kernel-source/KernelSU/kernel/Kbuild
+          grep -Fq 'KSU_COMMIT_SHA := 239e1e88-dirty' smoke/kernel-source/KernelSU/kernel/Kbuild
+          grep -Fq 'ccflags-y += -DKSU_VERSION_FULL=' smoke/kernel-source/KernelSU/kernel/Kbuild
+          echo 'Original Kbuild SHA and deterministic direct-source adaptation PASS; NO FLASH' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: P479-KernelSU-direct-source-smoke-${{ github.run_id }}
+          path: smoke/P479-KernelSU-direct-source.json
+          retention-days: 90
+          if-no-files-found: warn
