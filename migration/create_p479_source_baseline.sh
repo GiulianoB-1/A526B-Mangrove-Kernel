@@ -126,7 +126,37 @@ cd "$STAGING"
 git init -b main
 git config user.name "Mangrove Source Baseline CI"
 git config user.email "67099534+GiulianoB-1@users.noreply.github.com"
-git add --all
+# A kernel tree legitimately has .gitignore rules for generated sources, headers
+# and Android/KernelSU manager assets. An initial full-source baseline must not
+# silently omit those files. The nested .git directories were excluded by rsync.
+git add --all --force
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+root=Path('.')
+tracked={
+    p.decode('utf-8','surrogateescape')
+    for p in subprocess.check_output(['git','ls-files','-z']).split(b'\0')
+    if p
+}
+on_disk={
+    str(p)
+    for p in root.rglob('*')
+    if '.git' not in p.parts and (p.is_file() or p.is_symlink())
+}
+missing=sorted(on_disk-tracked)
+extra=sorted(tracked-on_disk)
+assert not missing and not extra, (
+    f'P479 source Git staging is incomplete: missing={missing[:15]} extra={extra[:15]}'
+)
+assert len(tracked)>60000, f'kernel source unexpectedly sparse: {len(tracked)} files'
+assert 'include/generated/a52_446s_manifest.h' in tracked
+assert 'ci/P479-native-WX-manifest.h' in tracked
+assert 'ci/P479-historical-manifest.h' in tracked
+assert 'KernelSU/.gitignore' in tracked
+assert 'KernelSU/.gitattributes' in tracked
+print('P479 full-source Git completeness verified:',len(tracked),'tracked files')
+PY
 if git diff --cached --quiet; then echo "error: empty source commit"; exit 1; fi
 git commit -m "baseline(P479): complete equivalent kernel tree, direct-source builds"
 git tag -a p479-baseline -m "Proven P479 source equivalent to run 43638159300 (NO FLASH)"
