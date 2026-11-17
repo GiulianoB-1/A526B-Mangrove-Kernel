@@ -50,6 +50,7 @@ on:
       - agent/p479-wx-equivalence-v2-no-flash
       - agent/p479-wx-ikheaders-proof
       - agent/p479-wx-compile-provenance-proof
+      - agent/p479-wx-full-provenance-proof
   workflow_dispatch:
     inputs:
       restore_mode:
@@ -2297,6 +2298,14 @@ jobs:
           # Its UTS build stamp, username and CI hostname are Kbuild inputs.
           printf '%s  %s\n' c13afa67c23f9484f4f67348098a7ab718d938faf6fc9d5975f512979609f846 \
             "$ROOT/ci/P479-compile.h" | sha256sum -c -
+          printf '%s  %s\n' 30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3b8de3906 \
+            "$ROOT/ci/P479-historical-manifest.h" | sha256sum -c -
+          printf '%s  %s\n' 30e36aa36b7612d17b87dbe10880826255cffb54e99f8615d5e663b3b8de3906 \
+            "$ROOT/include/generated/a52_446s_manifest.h" | sha256sum -c -
+          # Never lose the native WX header: original and rebuilt source
+          # fingerprints must remain separately recorded in proof evidence.
+          test -s "$ROOT/ci/P479-native-WX-manifest.h"
+          ! cmp -s "$ROOT/ci/P479-native-WX-manifest.h" "$ROOT/ci/P479-historical-manifest.h"
           # Force compilation of the binary which actually embeds compile.h.
           # Do not fake or directly rewrite System.map/vmlinux.
           rm -f "$BUILD/kernel/kheaders.o" "$BUILD/init/version.o"
@@ -2310,7 +2319,16 @@ jobs:
           # Verify native mkcompile_h really used the exact archived values.
           # No source code or safety gate is rewritten to force a false pass.
           cmp "$ROOT/ci/P479-compile.h" "$BUILD/include/generated/compile.h"
-          echo 'P479 original compile.h: sha256 and actual generated Kbuild header byte-for-byte PASS' >> "$GITHUB_STEP_SUMMARY"
+          # Expect the actual linked GKI Image, not a source-only header,
+          # to embed exactly the original P479 fingerprint.
+          grep -aFq 'a3c2e023da31ef40bbc92c83283acd2d399a51972ccdcd3c87f88477120a4d29' \
+            "$BUILD/arch/arm64/boot/Image"
+          if grep -aFq 'fb330e2da844e7b8b8b3043f7de3fdad5c6c2f9c3caae7c58ce6ad10a47eca8e' \
+               "$BUILD/arch/arm64/boot/Image"; then
+            echo '::error::WX native fingerprint unexpectedly remains in historical P479 replay Image'
+            exit 1
+          fi
+          echo 'P479 historical compile.h and generated fingerprint linked; current WX fingerprint recorded separately. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
           printf '%s  %s\n' 4613510d96312a7127828fa321fea544c23ac749d1f4ae82d9ac6b5b08167976 \
             "$BUILD/kernel/kheaders_data.tar.xz" | sha256sum -c -
           test -s "$BUILD/System.map" && test -s "$BUILD/vmlinux"
