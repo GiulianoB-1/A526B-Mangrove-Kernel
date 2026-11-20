@@ -1,0 +1,136 @@
+name: One-time P480 native audio materialization into direct source (NO FLASH)
+on:
+  push:
+    branches: [agent/p480-one-time-direct-source-bootstrap]
+    paths: [.github/workflows/p480-one-time-direct-source.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  materialize-native-audio-once:
+    if: ${{ contains(github.event.head_commit.message, '[P480-DIRECT-IMPORT]') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.SOURCE_REPO_PAT }}
+      SOURCE_REPO: GiulianoB-1/A526B-Mangrove-Source
+      SOURCE_BRANCH: feature/p480-a3c-native
+      EXPECTED_PARENT: 55babd9c651375580b3c5c10d7f37ac6213e005c
+      TG_SHA: 6bf351bdf18bdb228db79e66f14a7a9c0178e5d7
+      D54_SHA: c4cb0a9783fcfb8d17ddda02c0ad1678dcd0dac4
+    steps:
+      - name: Read pinned one-time source adapter from legacy repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Clone exact destination branch, fail if it moved
+        run: |
+          set -Eeuo pipefail
+          test -n "$GH_TOKEN" || { echo '::error::SOURCE_REPO_PAT missing'; exit 1; }
+          gh auth setup-git
+          gh repo clone "$SOURCE_REPO" direct-source -- --branch "$SOURCE_BRANCH" --single-branch
+          test "$(git -C direct-source rev-parse HEAD)" = "$EXPECTED_PARENT"
+          test ! -e direct-source/drivers/soc/qcom/p472_tg_audio/a3c
+          git -C direct-source config user.name 'github-actions[bot]'
+          git -C direct-source config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Fetch exact public donor commits with sparse checkout
+        run: |
+          set -Eeuo pipefail
+          donor() {
+            local dir="$1" url="$2" pinned="$3"
+            shift 3
+            mkdir -p "$dir"
+            git -C "$dir" init -q
+            git -C "$dir" remote add origin "$url"
+            git -C "$dir" fetch -q --depth=1 --filter=blob:none origin "$pinned"
+            git -C "$dir" sparse-checkout init --no-cone
+            git -C "$dir" sparse-checkout set --no-cone "$@"
+            git -C "$dir" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$dir" rev-parse HEAD)" = "$pinned"
+          }
+          donor tg https://github.com/micr0softstore/samsung_android_kernel_a52xq.git "$TG_SHA" \
+            '/techpack/audio/asoc/' '/arch/arm64/boot/dts/samsung/a52/a52xq/'
+          donor d54 https://github.com/turex/android_kernel_samsung_sm7325.git "$D54_SHA" \
+            '/techpack/audio/asoc/' '/include/uapi/sound/' \
+            '/include/linux/msm_ion.h' '/include/uapi/linux/msm_ion.h' \
+            '/include/uapi/linux/msm_ion_ids.h'
+          test -s tg/techpack/audio/asoc/kona.c
+          test -s d54/techpack/audio/asoc/kona.c
+          test -s d54/techpack/audio/asoc/msm_dailink.h
+          echo 'Exact pinned TG and Samsung 5.4 donors fetched; no artifacts used.'
+      - name: Materialize native C/H source exactly once
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/480_a3c_native.py \
+            --root "$PWD/direct-source" --tg "$PWD/tg" --d54 "$PWD/d54" \
+            --report "$PWD/direct-source/ci/P480-a3c-native-source.json"
+          python3 scripts/480_a3c_native.py --root "$PWD/direct-source" --check-only
+          test -s direct-source/drivers/soc/qcom/p472_tg_audio/a3c/kona.c
+          test -s direct-source/drivers/soc/qcom/p472_tg_audio/a3c/msm-pcm-q6-v2.c
+          test -s direct-source/drivers/soc/qcom/p472_tg_audio/a3c/msm-compress-q6-v2.c
+      - name: Derive exact opt-in P480 config with native kernel Kconfig
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu
+          cd direct-source
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ci/build.config')
+          cfg = p.read_text()
+          anchor = 'CONFIG_P472_A3B_B3=y\n'
+          assert cfg.count(anchor) == 1 and 'CONFIG_P480_A3C' not in cfg
+          assert 'CONFIG_P479_H4=y\n' in cfg
+          p.write_text(cfg.replace(anchor, anchor + 'CONFIG_P480_A3C=y\n', 1))
+          PY
+          mkdir -p out
+          cp ci/build.config out/.config
+          make O="$PWD/out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
+          cp out/.config ci/build.config
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, subprocess
+          baseline = subprocess.check_output(
+              ['git', 'show', 'HEAD:ci/build.config'], text=True).splitlines()
+          current = Path('ci/build.config').read_text().splitlines()
+          added = [s for s in current if s not in baseline]
+          removed = [s for s in baseline if s not in current]
+          assert added == ['CONFIG_P480_A3C=y'], (added, removed)
+          assert not removed, removed
+          assert current.count('CONFIG_P479_H4=y') == 1
+          sha = hashlib.sha256(Path('ci/build.config').read_bytes()).hexdigest()
+          p = Path('ci/build-manifest.json')
+          manifest = json.loads(p.read_text())
+          assert manifest['strict'] and not manifest['missing_required']
+          manifest['kernel_config_sha256'] = sha
+          manifest['stage'] = 'P480-A3c-native-candidate'
+          manifest['parent_baseline_commit'] = '55babd9c651375580b3c5c10d7f37ac6213e005c'
+          manifest['p480_source_materialized'] = True
+          manifest['flash_authorized'] = False
+          p.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          print('P480_A3C=y; original P479 gates retained; new config sha256:', sha)
+          PY
+      - name: Commit actual native sources, not a generator chain
+        run: |
+          set -Eeuo pipefail
+          cd direct-source
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PARENT"
+          git add -- ci/build.config ci/build-manifest.json ci/P480-a3c-native-source.json \
+            drivers/soc/qcom/Kconfig drivers/soc/qcom/p472_tg_audio
+          git diff --cached --quiet && { echo '::error::No native source staged'; exit 1; }
+          git diff --cached --name-only | tee /tmp/p480-committed-paths.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          paths = Path('/tmp/p480-committed-paths.txt').read_text().splitlines()
+          allowed = ('ci/build.config','ci/build-manifest.json',
+                     'ci/P480-a3c-native-source.json','drivers/soc/qcom/Kconfig',
+                     'drivers/soc/qcom/p472_tg_audio/')
+          assert all(p in allowed[:4] or p.startswith(allowed[4]) for p in paths)
+          assert any(p.endswith('/a3c/kona.c') for p in paths)
+          assert any(p.endswith('/a3c/msm-pcm-q6-v2.c') for p in paths)
+          PY
+          git commit -m 'P480 A3c: commit pinned real Q6/Kona/WCD938x source directly (NO FLASH)'
+          git push origin "HEAD:refs/heads/$SOURCE_BRANCH"
+          echo 'P480 native audio C/H files committed to destination branch; subsequent CI compiles actual source only. NO FLASH.' >> "$GITHUB_STEP_SUMMARY"
